@@ -249,7 +249,21 @@ if (require.main === module) {
     process.exit(1);
   }
 
-  const buffer = fs.readFileSync(filePath);
+  let buffer;
+  try {
+    buffer = fs.readFileSync(filePath);
+  } catch (err) {
+    console.log(JSON.stringify({
+      ok: false,
+      fileType: 'unknown',
+      errorFlag: 'read_error',
+      errorMessage: 'Gagal membaca file: ' + err.message,
+      textLength: 0,
+      textPreview: '',
+    }, null, 2));
+    process.exit(1);
+  }
+
   const mimeType = filePath.endsWith('.pdf') ? 'application/pdf'
     : filePath.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     : '';

@@ -27,6 +27,19 @@ function fillTemplate(template, data) {
 }
 
 // ============================================================
+// UTILITAS: Escape HTML (mencegah HTML injection di bodyHtml)
+// ============================================================
+function escapeHtml(str) {
+  if (str === undefined || str === null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// ============================================================
 // TEMPLATE: Notifikasi HR (High / Medium)
 // ============================================================
 /**
@@ -70,16 +83,16 @@ function hrNotificationEmail(data = {}) {
   ].join('\n');
 
   const bodyHtml = [
-    '<h3>Kandidat ' + kategori + ' (' + label + ')</h3>',
+    '<h3>Kandidat ' + escapeHtml(kategori) + ' (' + escapeHtml(label) + ')</h3>',
     '<table>',
-    '<tr><td><b>Nama</b></td><td>' + nama + '</td></tr>',
-    '<tr><td><b>Email</b></td><td>' + emailKandidat + '</td></tr>',
-    '<tr><td><b>Lowongan</b></td><td>' + lowongan + '</td></tr>',
-    '<tr><td><b>Kategori</b></td><td>' + kategori + ' (' + label + ')</td></tr>',
-    '<tr><td><b>Skor</b></td><td>' + skor + '/100</td></tr>',
-    '<tr><td><b>Skill</b></td><td>' + skillList + '</td></tr>',
+    '<tr><td><b>Nama</b></td><td>' + escapeHtml(nama) + '</td></tr>',
+    '<tr><td><b>Email</b></td><td>' + escapeHtml(emailKandidat) + '</td></tr>',
+    '<tr><td><b>Lowongan</b></td><td>' + escapeHtml(lowongan) + '</td></tr>',
+    '<tr><td><b>Kategori</b></td><td>' + escapeHtml(kategori) + ' (' + escapeHtml(label) + ')</td></tr>',
+    '<tr><td><b>Skor</b></td><td>' + escapeHtml(skor) + '/100</td></tr>',
+    '<tr><td><b>Skill</b></td><td>' + escapeHtml(skillList) + '</td></tr>',
     '</table>',
-    '<p><b>Alasan:</b><br>' + (alasan || '(tidak ada alasan)') + '</p>',
+    '<p><b>Alasan:</b><br>' + escapeHtml(alasan || '(tidak ada alasan)') + '</p>',
     '<p><i>Buka Google Sheets untuk detail lengkap dan CV kandidat.</i></p>',
   ].join('');
 
@@ -174,4 +187,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { hrNotificationEmail, autoReplyRejectEmail, fillTemplate };
+module.exports = { hrNotificationEmail, autoReplyRejectEmail, fillTemplate, escapeHtml };

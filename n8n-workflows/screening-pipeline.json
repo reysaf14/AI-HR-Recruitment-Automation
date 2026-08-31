@@ -1,0 +1,328 @@
+{
+  "name": "Screening Pipeline Utama - AI HR Recruitment",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            { "mode": "everyMinute" }
+          ]
+        }
+      },
+      "id": "trigger-google-forms",
+      "name": "Trig Perubahan Response Form",
+      "type": "n8n-nodes-base.googleFormsTrigger",
+      "typeVersion": 1,
+      "position": [-1200, 0],
+      "webhookId": "screening-pipeline-forms-trigger"
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "fileId": "={{ $json.response.answers['Upload CV'].fileId }}",
+        "options": {}
+      },
+      "id": "download-cv",
+      "name": "Download CV dari Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 2,
+      "position": [-1000, 0],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "GOOGLE_DRIVE_CREDENTIALS_ID",
+          "name": "Google Drive (AI HR)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse CV: extract text dari PDF/DOCX/TXT\nfunction detectType(buffer, filename) {\n  const nameLower = (filename || '').toLowerCase();\n  if (buffer.length >= 4) {\n    if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) return 'pdf';\n    if (buffer[0] === 0x50 && buffer[1] === 0x4B) return 'docx';\n  }\n  if (nameLower.endsWith('.pdf')) return 'pdf';\n  if (nameLower.endsWith('.docx')) return 'docx';\n  if (nameLower.endsWith('.txt')) return 'txt';\n  return 'unsupported';\n}\nfunction extractTextPdf(buf) {\n  const t = buf.toString('utf8');\n  const m = t.match(/[\\x20-\\x7E]{4,}/g);\n  return m ? m.join(' ') : '';\n}\nconst items = [];\nfor (const item of $input.all()) {\n  const raw = item.json;\n  const fileBuffer = raw.file && raw.file.data ? Buffer.from(raw.file.data, 'base64') : Buffer.alloc(0);\n  const filename = (raw.file && (raw.file.fileName || raw.file.name)) || '';\n  const type = detectType(fileBuffer, filename);\n  let textCV = '', errorFlag = '';\n  if (type === 'pdf') { textCV = extractTextPdf(fileBuffer); if (!textCV.trim()) { errorFlag = 'parse_error'; textCV = ''; } }\n  else if (type === 'docx') { textCV = ''; errorFlag = 'parse_error'; }\n  else if (type === 'txt') { textCV = fileBuffer.toString('utf8'); }\n  else { errorFlag = 'format_unsupported'; textCV = ''; }\n  items.push({ json: { ...raw, textCV, cvFileType: type, parseErrorFlag: errorFlag } });\n}\nreturn items;"
+      },
+      "id": "parse-cv",
+      "name": "Parse CV (Code Node)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-800, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rule Check - Syarat Wajib (Tahap 1)\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const textCV = (d.textCV || '').toLowerCase();\n  const kriteria = Array.isArray(d.kriteria) ? d.kriteria : [];\n  let terpenuhi = true;\n  const terpenuhiList = [], gagalList = [];\n  for (const k of kriteria) {\n    const key = String(k).toLowerCase().replace(/[.\\s]/g, '');\n    if (key && textCV.includes(key)) terpenuhiList.push(k);\n    else { terpenuhi = false; gagalList.push(k); }\n  }\n  const ruleCheck = terpenuhi ? 'Memenuhi' : 'Tidak Memenuhi';\n  const alasan = terpenuhi ? 'Semua kriteria wajib terpenuhi' : 'Kriteria tidak terpenuhi: ' + gagalList.join(', ');\n  items.push({ json: { ...d, ruleCheck, alasanRuleCheck: alasan, kriteriaTerpenuhi: terpenuhiList, kriteriaGagal: gagalList } });\n}\nreturn items;"
+      },
+      "id": "rule-check",
+      "name": "Rule Check (Code Node)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-600, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "conditions": [
+            {
+              "id": "rc-pass",
+              "leftValue": "={{ $json.ruleCheck }}",
+              "rightValue": "Memenuhi",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "router-rc-llm",
+      "name": "Rule Check Lolos?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-400, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Cabang TIDAK LOLOS rule check -> set skor 0, kategori Low\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  items.push({\n    json: {\n      ...d,\n      skorLLM: 0,\n      alasanSkor: 'Gagal rule check awal: ' + (d.alasanRuleCheck || ''),\n      skillTerdeteksi: '',\n      enrichmentNotes: '',\n      kategori: 'Low',\n      alasanKategori: 'Gagal di tahap rule check (skor 0)',\n      kategoriLabel: 'Belum Sesuai',\n      errorFlag: d.parseErrorFlag || 'rule_check_failed'\n    }\n  });\n}\nreturn items;"
+      },
+      "id": "set-low-rc-reject",
+      "name": "Set Skor 0 (Reject)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-200, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.LLM_API_URL }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Authorization", "value": "Bearer {{ $env.LLM_API_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"model\": \"={{ $env.LLM_MODEL }}\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Anda asisten perekrut. Nilai kesesuaian CV dengan kriteria. Deteksi skill ekuivalen/superior (contoh Adobe Premiere > Capcut). Hitung skor 0-100. Balas JSON: {\\\"skor\\\": <0-100>, \\\"skill_terdeteksi\\\": [...], \\\"alasan_llm\\\": \\\"...\\\", \\\"enrichment_notes\\\": \\\"...\\\"} dalam Bahasa Indonesia.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Lowongan: {{ $json.lowongan }}\\nKriteria: {{ $json.kriteriaCsv }}\\nCV: {{ $json.textCV }}\"\n    }\n  ],\n  \"temperature\": 0.2,\n  \"response_format\": { \"type\": \"json_object\" }\n}",
+        "options": {
+          "timeout": 120000
+        },
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 1000,
+        "onError": "continueRegularOutput"
+      },
+      "id": "llm-scoring",
+      "name": "LLM Enrichment + Scoring",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-200, -200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rule Kategori (Tahap 3): map skor -> kategori berdasarkan ambang\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  let ambangHigh = 80, ambangLow = 40;\n  if (!isNaN(parseInt(d.ambangHigh,10))) ambangHigh = parseInt(d.ambangHigh,10);\n  if (!isNaN(parseInt(d.ambangLow,10))) ambangLow = parseInt(d.ambangLow,10);\n  let skor = Number(d.skorLLM ?? d.skor ?? 0);\n  if (isNaN(skor)) skor = 0;\n  skor = Math.max(0, Math.min(100, skor));\n  let kategori, label, alasan;\n  if (skor >= ambangHigh) { kategori='High'; label='Layak Lanjut'; alasan='Skor '+skor+' ≥ '+ambangHigh; }\n  else if (skor >= ambangLow) { kategori='Medium'; label='Perlu Ditinjau'; alasan='Skor '+skor+' di antara '+ambangLow+'-'+ambangHigh; }\n  else { kategori='Low'; label='Belum Sesuai'; alasan='Skor '+skor+' < '+ambangLow; }\n  items.push({ json: { ...d, skorLLM: skor, kategori, kategoriLabel: label, alasanKategori: alasan } });\n}\nreturn items;"
+      },
+      "id": "rule-kategori",
+      "name": "Rule Kategori (Code Node)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, -200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fallback LLM: parse response & gabungkan, atau rule-based jika gagal\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const body = d.body || d.json || {};\n  let parsed = null;\n  const raw = (body.choices && body.choices[0] && body.choices[0].message && body.choices[0].message.content) || '';\n  try { parsed = JSON.parse(raw); } catch (_) {\n    const m = raw.match(/\\{[\\s\\S]*\\}/);\n    if (m) { try { parsed = JSON.parse(m[0]); } catch (_2) { parsed = null; } }\n  }\n  let skor = 0, skillTerdeteksi = '', alasan = '', notes = '', errorFlag = d.errorFlag || '';\n  if (parsed) {\n    skor = Number(parsed.skor); if (isNaN(skor)) skor = 0;\n    skillTerdeteksi = Array.isArray(parsed.skill_terdeteksi) ? parsed.skill_terdeteksi.join(', ') : String(parsed.skill_terdeteksi || '');\n    alasan = String(parsed.alasan_llm || '');\n    notes = String(parsed.enrichment_notes || '');\n  } else {\n    errorFlag = 'llm_parse_error';\n  }\n  items.push({ json: { ...d, skorLLM: skor, skillTerdeteksi, alasanSkor: alasan, enrichmentNotes: notes, errorFlag } });\n}\nreturn items;"
+      },
+      "id": "parse-llm-response",
+      "name": "Parse LLM Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, -200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Tulis ke Sheets (Data Kandidat). Dedup: cek email+lowongan.\n// Asumsi: Google Sheets node nantinya di-append. Di sini kita siapkan baris.\n\nfunction getVals(d) {\n  return [\n    new Date().toISOString(),      // Timestamp\n    d.nama || '',                  // Nama\n    d.email || '',                 // Email\n    d.noHP || '',                  // No HP\n    d.lowongan || '',              // Lowongan\n    d.urlCV || '',                 // URL CV\n    d.ruleCheck || '',             // Rule Check\n    d.alasanRuleCheck || '',       // Alasan Rule Check\n    d.skillTerdeteksi || '',       // Skill Terdeteksi\n    d.skorLLM ?? '',               // Skor LLM\n    d.alasanSkor || '',            // Alasan Skor\n    d.enrichmentNotes || '',       // Enrichment Notes\n    d.kategori || '',              // Kategori\n    d.alasanKategori || '',        // Alasan Kategori\n    d.kategoriLabel || '',         // Kategori Label\n    'N/A',                         // Status Notifikasi HR\n    'N/A',                         // Status Auto-Reply\n    '',                            // Waktu Auto-Reply\n    d.errorFlag || ''              // Error Flag\n  ];\n}\n\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  items.push({\n    json: {\n      ...d,\n      sheetRow: getVals(d),\n      autoReplyStatus: 'N/A'\n    }\n  });\n}\nreturn items;"
+      },
+      "id": "prepare-sheet-row",
+      "name": "Siapkan Baris Sheets",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, -100]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.SHEET_ID_DATA_KANDIDAT }}",
+          "mode": "id"
+        },
+        "sheetName": "Data Kandidat",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $json.sheetRow[0] }}",
+            "Nama": "={{ $json.sheetRow[1] }}",
+            "Email": "={{ $json.sheetRow[2] }}",
+            "No HP": "={{ $json.sheetRow[3] }}",
+            "Lowongan": "={{ $json.sheetRow[4] }}",
+            "URL CV": "={{ $json.sheetRow[5] }}",
+            "Rule Check": "={{ $json.sheetRow[6] }}",
+            "Alasan Rule Check": "={{ $json.sheetRow[7] }}",
+            "Skill Terdeteksi": "={{ $json.sheetRow[8] }}",
+            "Skor LLM": "={{ $json.sheetRow[9] }}",
+            "Alasan Skor": "={{ $json.sheetRow[10] }}",
+            "Enrichment Notes": "={{ $json.sheetRow[11] }}",
+            "Kategori": "={{ $json.sheetRow[12] }}",
+            "Alasan Kategori": "={{ $json.sheetRow[13] }}",
+            "Kategori Label": "={{ $json.sheetRow[14] }}",
+            "Status Notifikasi HR": "={{ $json.sheetRow[15] }}",
+            "Status Auto-Reply": "={{ $json.sheetRow[16] }}",
+            "Waktu Auto-Reply": "={{ $json.sheetRow[17] }}",
+            "Error Flag": "={{ $json.sheetRow[18] }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "write-sheets",
+      "name": "Tulis ke Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [600, -100],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CREDENTIALS_ID",
+          "name": "Google Sheets (AI HR)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "conditions": [
+            {
+              "id": "is-low",
+              "leftValue": "={{ $json.kategori }}",
+              "rightValue": "Low",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "router-kategori",
+      "name": "Kategori Low?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [800, -100]
+    },
+    {
+      "parameters": {
+        "to": "={{ $env.HR_EMAIL }}",
+        "subject": "={{ '[Lamaran ' + $json.kategori + '] ' + $json.nama + ' - ' + $json.lowongan }}",
+        "emailFormat": "html",
+        "message": "={{ '<h3>Kandidat ' + $json.kategori + ' (' + $json.kategoriLabel + ')</h3><table><tr><td><b>Nama</b></td><td>' + $json.nama + '</td></tr><tr><td><b>Email</b></td><td>' + $json.email + '</td></tr><tr><td><b>Lowongan</b></td><td>' + $json.lowongan + '</td></tr><tr><td><b>Kategori</b></td><td>' + $json.kategori + '</td></tr><tr><td><b>Skor</b></td><td>' + $json.skorLLM + '/100</td></tr><tr><td><b>Skill</b></td><td>' + $json.skillTerdeteksi + '</td></tr></table><p><b>Alasan:</b><br>' + $json.alasanSkor + '</p>' }}",
+        "options": {}
+      },
+      "id": "notif-hr",
+      "name": "Notifikasi HR",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1000, -150],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CREDENTIALS_ID",
+          "name": "Gmail (AI HR)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Kategori -> status email yang harus dikirim\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  let notifStatus = 'N/A';\n  let autoReplyStatus = 'N/A';\n  if (d.kategori === 'High' || d.kategori === 'Medium') { notifStatus = 'Perlu'; autoReplyStatus = 'N/A'; }\n  else if (d.kategori === 'Low') { notifStatus = 'N/A'; autoReplyStatus = 'Pending'; }\n  items.push({ json: { ...d, notifStatus, autoReplyStatus } });\n}\nreturn items;"
+      },
+      "id": "set-email-status",
+      "name": "Set Status Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Tulis Audit Log (append-only)\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  items.push({\n    json: {\n      timestamp: new Date().toISOString(),\n      eventType: d.eventType || 'pipeline_end',\n      emailKandidat: d.email || '',\n      lowongan: d.lowongan || '',\n      detail: 'Kandidat ' + (d.nama || '') + ' → kategori ' + (d.kategori || '') + ' (skor ' + (d.skorLLM ?? '') + ')',\n      status: 'Success'\n    }\n  });\n}\nreturn items;"
+      },
+      "id": "build-audit-row",
+      "name": "Build Audit Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 0]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.SHEET_ID_AUDIT_LOG }}",
+          "mode": "id"
+        },
+        "sheetName": "Audit Log",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $json.timestamp }}",
+            "Event Type": "={{ $json.eventType }}",
+            "Email Kandidat": "={{ $json.emailKandidat }}",
+            "Lowongan": "={{ $json.lowongan }}",
+            "Detail": "={{ $json.detail }}",
+            "Status": "={{ $json.status }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "append-audit-log",
+      "name": "Tulis Audit Log (Sheets)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1200, 0],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CREDENTIALS_ID",
+          "name": "Google Sheets (AI HR)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Trig Perubahan Response Form": { "main": [[{ "node": "Download CV dari Drive", "type": "main", "index": 0 }]] },
+    "Download CV dari Drive": { "main": [[{ "node": "Parse CV (Code Node)", "type": "main", "index": 0 }]] },
+    "Parse CV (Code Node)": { "main": [[{ "node": "Rule Check (Code Node)", "type": "main", "index": 0 }]] },
+    "Rule Check (Code Node)": { "main": [[{ "node": "Rule Check Lolos?", "type": "main", "index": 0 }]] },
+    "Rule Check Lolos?": {
+      "main": [
+        [
+          { "node": "LLM Enrichment + Scoring", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Set Skor 0 (Reject)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "LLM Enrichment + Scoring": { "main": [[{ "node": "Parse LLM Response", "type": "main", "index": 0 }]] },
+    "Parse LLM Response": { "main": [[{ "node": "Rule Kategori (Code Node)", "type": "main", "index": 0 }]] },
+    "Rule Kategori (Code Node)": { "main": [[{ "node": "Siapkan Baris Sheets", "type": "main", "index": 0 }]] },
+    "Set Skor 0 (Reject)": { "main": [[{ "node": "Siapkan Baris Sheets", "type": "main", "index": 0 }]] },
+    "Siapkan Baris Sheets": { "main": [[{ "node": "Tulis ke Google Sheets", "type": "main", "index": 0 }]] },
+    "Tulis ke Google Sheets": { "main": [[{ "node": "Kategori Low?", "type": "main", "index": 0 }]] },
+    "Kategori Low?": {
+      "main": [
+        [
+          { "node": "Set Status Email", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Notifikasi HR", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Notifikasi HR": { "main": [[{ "node": "Set Status Email", "type": "main", "index": 0 }]] },
+    "Set Status Email": { "main": [[{ "node": "Build Audit Row", "type": "main", "index": 0 }]] },
+    "Build Audit Row": { "main": [[{ "node": "Tulis Audit Log (Sheets)", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

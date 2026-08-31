@@ -30,18 +30,35 @@ const crypto = require('crypto');
 // ============================================================
 // CONFIG
 // ============================================================
-const BUFFER_DIR = process.env.BUFFER_DIR || path.join(__dirname, '..', 'buffer');
+const DEFAULT_BUFFER_DIR = path.join(__dirname, '..', 'buffer');
 const DEFAULT_MAX_RETRY = 10;
 const RETRY_INTERVAL_MS = 5 * 60 * 1000; // 5 menit
 
 // ============================================================
-// UTILITAS: Pastikan folder buffer ada
+// UTILITAS: Pastikan folder buffer ada + resolve dir saat dipanggil
 // ============================================================
+function getBufferDir() {
+  return process.env.BUFFER_DIR || DEFAULT_BUFFER_DIR;
+}
+
 function ensureDir() {
-  if (!fs.existsSync(BUFFER_DIR)) {
-    fs.mkdirSync(BUFFER_DIR, { recursive: true });
+  const dir = getBufferDir();
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
-  return BUFFER_DIR;
+  return dir;
+}
+
+// ============================================================
+// UTILITAS: Guard path traversal — pastikan resolved path tetap di dalam BUFFER_DIR
+// ============================================================
+function safePath(filename) {
+  const dir = getBufferDir();
+  const resolved = path.resolve(dir, filename);
+  if (!resolved.startsWith(path.resolve(dir))) {
+    return null; // path traversal attempt
+  }
+  return resolved;
 }
 
 // ============================================================
@@ -84,16 +101,17 @@ function bufferWrite(data, options = {}) {
  * @returns {object[]} - Array entry buffer
  */
 function listBuffer() {
-  if (!fs.existsSync(BUFFER_DIR)) return [];
+  const dir = getBufferDir();
+  if (!fs.existsSync(dir)) return [];
 
-  const files = fs.readdirSync(BUFFER_DIR)
+  const files = fs.readdirSync(dir)
     .filter((f) => f.endsWith('.json'))
     .sort();
 
   const entries = [];
   for (const f of files) {
     try {
-      const raw = fs.readFileSync(path.join(BUFFER_DIR, f), 'utf8');
+      const raw = fs.readFileSync(path.join(dir, f), 'utf8');
       entries.push(JSON.parse(raw));
     } catch (_e) {
       // skip file corrupt
@@ -108,7 +126,8 @@ function listBuffer() {
  * @returns {object|null} - Entry buffer atau null jika tidak ada
  */
 function bufferLoad(filename) {
-  const filePath = path.join(BUFFER_DIR, filename);
+  const filePath = safePath(filename);
+  if (!filePath) return null; // path traversal attempt
   if (!fs.existsSync(filePath)) return null;
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -123,7 +142,8 @@ function bufferLoad(filename) {
  * @returns {boolean}
  */
 function bufferRemove(filename) {
-  const filePath = path.join(BUFFER_DIR, filename);
+  const filePath = safePath(filename);
+  if (!filePath) return false; // path traversal attempt
   if (!fs.existsSync(filePath)) return false;
   try {
     fs.unlinkSync(filePath);
@@ -149,14 +169,6 @@ function shouldRetry(entry) {
     return { shouldRetry: false, reason: 'belum waktunya retry' };
   }
   return { shouldRetry: true, reason: 'siap retry' };
-}
-
-/**
- * Kembalikan path folder buffer.
- */
-function getBufferDir() {
-  ensureDir();
-  return BUFFER_DIR;
 }
 
 // ============================================================
@@ -200,4 +212,5 @@ module.exports = {
   shouldRetry,
   getBufferDir,
   ensureDir,
+  safePath,
 };

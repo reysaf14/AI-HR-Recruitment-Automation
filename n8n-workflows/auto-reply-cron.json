@@ -97,7 +97,7 @@
         "to": "={{ $json.C || $json.Email }}",
         "subject": "={{ 'Informasi Lamaran - ' + ($json.E || $json.Lowongan) }}",
         "emailFormat": "html",
-        "message": "={{ '<p>Halo ' + ($json.B || $json.Nama || 'Calon Kandidat').replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + ',</p><p>Terima kasih telah melamar posisi ' + ($json.E || $json.Lowongan || '').replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + '.</p><p>Kami telah meninjau lamaran Anda dengan saksama. Pada tahap seleksi ini, kami menilai profil Anda belum sesuai dengan kriteria yang dibutuhkan untuk posisi tersebut.</p><p>Kami sangat menghargai waktu dan minat Anda untuk bergabung dengan kami. Kami berharap Anda sukses dalam perjalanan karier dan semoga kita dapat bekerja sama di kesempatan lain.</p><p>Salam hangat,<br>Tim Rekrutmen</p>' }}",
+        "message": "={{ '<p>Halo ' + ($json.B || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + ',</p>' + '<p>Terima kasih telah melamar posisi ' + ($json.E || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + '.</p>' + '<p>Kami telah meninjau lamaran Anda dengan saksama. Pada tahap seleksi ini, kami menilai profil Anda belum sesuai dengan kriteria yang dibutuhkan untuk posisi tersebut.</p>' + '<p>Kami sangat menghargai waktu dan minat Anda untuk bergabung dengan kami. Kami berharap Anda sukses dalam perjalanan karier dan semoga kita dapat bekerja sama di kesempatan lain.</p>' + '<p>Salam hangat,<br>Tim Rekrutmen</p>' }}",
         "options": {
           "retryOnFail": true,
           "maxTries": 4,

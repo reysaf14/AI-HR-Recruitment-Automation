@@ -120,16 +120,20 @@ function autoReplyRejectEmail(data = {}) {
     emailKandidat = '',
   } = data;
 
+  const safeNama = nama || 'Calon Kandidat';
+  const safeLowongan = lowongan || '';
+  const safePerusahaan = perusahaan || 'Tim Rekrutmen';
+
   const subject = fillTemplate(
     process.env.EMAIL_SUBJECT_REJECT || 'Informasi Lamaran - {lowongan}',
-    { lowongan }
+    { lowongan: safeLowongan }
   );
 
   const bodyText = [
-    'Halo ' + (nama || 'Calon Kandidat') + ',',
+    'Halo ' + safeNama + ',',
     '',
-    'Terima kasih telah melamar posisi ' + lowongan +
-      (perusahaan ? ' di ' + perusahaan : '') + '.',
+    'Terima kasih telah melamar posisi ' + safeLowongan +
+      (perusahaan ? ' di ' + safePerusahaan : '') + '.',
     '',
     'Kami telah meninjau lamaran Anda dengan saksama. Pada tahap seleksi ini,',
     'kami menilai profil Anda belum sesuai dengan kriteria yang dibutuhkan',
@@ -140,13 +144,27 @@ function autoReplyRejectEmail(data = {}) {
     'bekerja sama di kesempatan lain.',
     '',
     'Salam hangat,',
-    (perusahaan || 'Tim Rekrutmen'),
+    safePerusahaan,
   ].join('\n');
+
+  // bodyHtml: escape semua field user untuk mencegah HTML injection
+  const bodyHtml = [
+    '<p>Halo ' + escapeHtml(safeNama) + ',</p>',
+    '<p>Terima kasih telah melamar posisi ' + escapeHtml(safeLowongan) +
+      (perusahaan ? ' di ' + escapeHtml(safePerusahaan) : '') + '.</p>',
+    '<p>Kami telah meninjau lamaran Anda dengan saksama. Pada tahap seleksi ini,',
+    'kami menilai profil Anda belum sesuai dengan kriteria yang dibutuhkan',
+    'untuk posisi tersebut.</p>',
+    '<p>Kami sangat menghargai waktu dan minat Anda untuk bergabung dengan kami.',
+    'Kami berharap Anda sukses dalam perjalanan karier dan semoga kita dapat',
+    'bekerja sama di kesempatan lain.</p>',
+    '<p>Salam hangat,<br>' + escapeHtml(safePerusahaan) + '</p>',
+  ].join('');
 
   return {
     subject,
     bodyText,
-    bodyHtml: bodyText.replace(/\n/g, '<br>'),
+    bodyHtml,
     to: emailKandidat,
   };
 }

@@ -5,7 +5,9 @@
       "parameters": {
         "pollTimes": {
           "item": [
-            { "mode": "everyMinute" }
+            {
+              "mode": "everyMinute"
+            }
           ]
         }
       },
@@ -13,7 +15,10 @@
       "name": "Trig Perubahan Response Form",
       "type": "n8n-nodes-base.googleFormsTrigger",
       "typeVersion": 1,
-      "position": [-1200, 0],
+      "position": [
+        -1400,
+        0
+      ],
       "webhookId": "screening-pipeline-forms-trigger"
     },
     {
@@ -27,12 +32,12 @@
       "name": "Download CV dari Drive",
       "type": "n8n-nodes-base.googleDrive",
       "typeVersion": 2,
-      "position": [-1000, 0],
+      "position": [
+        -1200,
+        0
+      ],
       "credentials": {
-        "googleDriveOAuth2Api": {
-          "id": "GOOGLE_DRIVE_CREDENTIALS_ID",
-          "name": "Google Drive (AI HR)"
-        }
+        "googleDriveOAuth2Api": "Google Drive (AI HR)"
       }
     },
     {
@@ -43,7 +48,10 @@
       "name": "Parse CV (Code Node)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-800, 0]
+      "position": [
+        -1000,
+        0
+      ]
     },
     {
       "parameters": {
@@ -53,18 +61,29 @@
       "name": "Rule Check (Code Node)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-600, 0]
+      "position": [
+        -800,
+        0
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
           "conditions": [
             {
               "id": "rc-pass",
               "leftValue": "={{ $json.ruleCheck }}",
               "rightValue": "Memenuhi",
-              "operator": { "type": "string", "operation": "equals" }
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
             }
           ]
         },
@@ -74,7 +93,10 @@
       "name": "Rule Check Lolos?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [-400, 0]
+      "position": [
+        -600,
+        0
+      ]
     },
     {
       "parameters": {
@@ -84,65 +106,120 @@
       "name": "Set Skor 0 (Reject)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-200, 200]
+      "position": [
+        -400,
+        200
+      ]
     },
     {
       "parameters": {
-        "url": "={{ $env.LLM_API_URL }}",
-        "method": "POST",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "Content-Type", "value": "application/json" },
-            { "name": "Authorization", "value": "Bearer {{ $env.LLM_API_KEY }}" }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "{\n  \"model\": \"={{ $env.LLM_MODEL }}\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Anda asisten perekrut. Nilai kesesuaian CV dengan kriteria. Deteksi skill ekuivalen/superior (contoh Adobe Premiere > Capcut). Hitung skor 0-100. Balas JSON: {\\\"skor\\\": <0-100>, \\\"skill_terdeteksi\\\": [...], \\\"alasan_llm\\\": \\\"...\\\", \\\"enrichment_notes\\\": \\\"...\\\"} dalam Bahasa Indonesia.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Lowongan: {{ $json.lowongan }}\\nKriteria: {{ $json.kriteriaCsv }}\\nCV: {{ $json.textCV }}\"\n    }\n  ],\n  \"temperature\": 0.2,\n  \"response_format\": { \"type\": \"json_object\" }\n}",
-        "options": {
-          "timeout": 120000
-        },
-        "retryOnFail": true,
-        "maxTries": 3,
-        "waitBetweenTries": 1000,
-        "onError": "continueRegularOutput"
+        "jsCode": "// LLM Scoring dengan Exponential Backoff Retry (3x: 1s, 3s, 7s)\n(async () => {\n  async function callLLMWithRetry(payload, config, maxRetries = 3) {\n    const baseDelay = 1000;\n    const multiplier = 3;\n    \n    for (let attempt = 0; attempt <= maxRetries; attempt++) {\n      try {\n        const controller = new AbortController();\n        const timeout = setTimeout(() => controller.abort(), 120000);\n        \n        const resp = await fetch(config.apiUrl, {\n          method: 'POST',\n          headers: {\n            'Content-Type': 'application/json',\n            'Authorization': 'Bearer ' + config.apiKey\n          },\n          body: JSON.stringify(payload),\n          signal: controller.signal\n        });\n        \n        clearTimeout(timeout);\n        \n        if (!resp.ok) {\n          const bodyText = await resp.text();\n          throw new Error('LLM API HTTP ' + resp.status + ': ' + bodyText.slice(0, 200));\n        }\n        \n        const data = await resp.json();\n        return data.choices?.[0]?.message?.content || data.content || '';\n      } catch (err) {\n        if (attempt >= maxRetries) throw err;\n        const delay = baseDelay * Math.pow(multiplier, attempt);\n        await new Promise(r => setTimeout(r, delay));\n      }\n    }\n  }\n\n  function parseLLMResponse(raw) {\n    if (!raw) return null;\n    let content = String(raw).trim();\n    const fenceMatch = content.match(/```(?:json)?\\s*([\\s\\S]*?)```/);\n    if (fenceMatch) content = fenceMatch[1].trim();\n    try { return JSON.parse(content); } catch (_) {}\n    const jsonMatch = content.match(/\\{[\\s\\S]*\\}/);\n    if (jsonMatch) { try { return JSON.parse(jsonMatch[0]); } catch (_) {} }\n    return null;\n  }\n\n  function normalizeScore(raw) {\n    const s = Number(raw);\n    return isNaN(s) ? null : Math.max(0, Math.min(100, s));\n  }\n\n  const items = [];\n  for (const item of $input.all()) {\n    const d = item.json;\n    const apiKey = $env.LLM_API_KEY;\n    const apiUrl = $env.LLM_API_URL;\n    const model = $env.LLM_MODEL || 'default';\n    \n    if (!apiKey || !apiUrl) {\n      items.push({ json: { ...d, skorLLM: 0, skillTerdeteksi: '', alasanSkor: 'LLM config missing', enrichmentNotes: '', errorFlag: 'llm_config_missing', llmRetry: 0 } });\n      continue;\n    }\n    \n    const kriteriaCsv = Array.isArray(d.kriteria) ? d.kriteria.join(', ') : String(d.kriteria || '');\n    const payload = {\n      model,\n      messages: [\n        { role: 'system', content: 'Anda asisten perekrut. Nilai kesesuaian CV dengan kriteria. Deteksi skill ekuivalen/superior (contoh Adobe Premiere > Capcut). Hitung skor 0-100. Balas JSON: {\"skor\": <0-100>, \"skill_terdeteksi\": [...], \"alasan_llm\": \"...\", \"enrichment_notes\": \"...\"} dalam Bahasa Indonesia.' },\n        { role: 'user', content: 'Lowongan: ' + (d.lowongan || '') + '\\nKriteria: ' + kriteriaCsv + '\\nCV: ' + (d.textCV || '') }\n      ],\n      temperature: 0.2,\n      response_format: { type: 'json_object' }\n    };\n    \n    try {\n      const rawContent = await callLLMWithRetry(payload, { apiKey, apiUrl, model }, 3);\n      const parsed = parseLLMResponse(rawContent);\n      \n      if (parsed) {\n        const skor = normalizeScore(parsed.skor);\n        if (skor !== null) {\n          items.push({ json: { ...d, skorLLM: skor, skillTerdeteksi: Array.isArray(parsed.skill_terdeteksi) ? parsed.skill_terdeteksi.join(', ') : String(parsed.skill_terdeteksi || ''), alasanSkor: String(parsed.alasan_llm || ''), enrichmentNotes: String(parsed.enrichment_notes || ''), errorFlag: '', llmRetries: 3 } });\n          continue;\n        }\n      }\n      throw new Error('LLM parse failed');\n    } catch (err) {\n      const textCV = (d.textCV || '').toLowerCase();\n      const kriteria = Array.isArray(d.kriteria) ? d.kriteria : [];\n      const bobotSkill = Number(d.bobotSkill) || 0.40;\n      const bobotExp = Number(d.bobotPengalaman) || 0.35;\n      const bobotEdu = Number(d.bobotPendidikan) || 0.25;\n      \n      function scoreComponent(items) {\n        if (items.length === 0) return 100;\n        let hit = 0;\n        for (const k of items) {\n          const key = String(k).toLowerCase().replace(/[.\\s]/g, '');\n          if (key && textCV.includes(key)) hit++;\n        }\n        return (hit / items.length) * 100;\n      }\n      \n      const skillK = kriteria.filter(k => !String(k).toLowerCase().startsWith('pengalaman:') && !String(k).toLowerCase().startsWith('pendidikan:'));\n      const expK = kriteria.filter(k => String(k).toLowerCase().startsWith('pengalaman:'));\n      const eduK = kriteria.filter(k => String(k).toLowerCase().startsWith('pendidikan:'));\n      \n      const skor = Math.round(scoreComponent(skillK) * bobotSkill + scoreComponent(expK) * bobotExp + scoreComponent(eduK) * bobotEdu);\n      \n      items.push({ json: { ...d, skorLLM: skor, skillTerdeteksi: '', alasanSkor: 'Fallback rule-based (LLM gagal: ' + err.message + ')', enrichmentNotes: '', errorFlag: 'llm_fallback', llmRetries: 3 } });\n    }\n  }\n  return items;\n})();"
       },
       "id": "llm-scoring",
-      "name": "LLM Enrichment + Scoring",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [-200, -200]
+      "name": "LLM Scoring (Code Node + Retry)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        -200
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// Rule Kategori (Tahap 3): map skor -> kategori berdasarkan ambang\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  let ambangHigh = 80, ambangLow = 40;\n  if (!isNaN(parseInt(d.ambangHigh,10))) ambangHigh = parseInt(d.ambangHigh,10);\n  if (!isNaN(parseInt(d.ambangLow,10))) ambangLow = parseInt(d.ambangLow,10);\n  let skor = Number(d.skorLLM ?? d.skor ?? 0);\n  if (isNaN(skor)) skor = 0;\n  skor = Math.max(0, Math.min(100, skor));\n  let kategori, label, alasan;\n  if (skor >= ambangHigh) { kategori='High'; label='Layak Lanjut'; alasan='Skor '+skor+' ≥ '+ambangHigh; }\n  else if (skor >= ambangLow) { kategori='Medium'; label='Perlu Ditinjau'; alasan='Skor '+skor+' di antara '+ambangLow+'-'+ambangHigh; }\n  else { kategori='Low'; label='Belum Sesuai'; alasan='Skor '+skor+' < '+ambangLow; }\n  items.push({ json: { ...d, skorLLM: skor, kategori, kategoriLabel: label, alasanKategori: alasan } });\n}\nreturn items;"
+        "jsCode": "// Rule Kategori (Tahap 3): map skor -> kategori berdasarkan ambang\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  let ambangHigh = 80, ambangLow = 40;\n  if (!isNaN(parseInt(d.ambangHigh,10))) ambangHigh = parseInt(d.ambangHigh,10);\n  if (!isNaN(parseInt(d.ambangLow,10))) ambangLow = parseInt(d.ambangLow,10);\n  let skor = Number(d.skorLLM ?? 0);\n  if (isNaN(skor)) skor = 0;\n  skor = Math.max(0, Math.min(100, skor));\n  let kategori, label, alasan;\n  if (skor >= ambangHigh) { kategori='High'; label='Layak Lanjut'; alasan='Skor '+skor+' ≥ '+ambangHigh; }\n  else if (skor >= ambangLow) { kategori='Medium'; label='Perlu Ditinjau'; alasan='Skor '+skor+' di antara '+ambangLow+'-'+ambangHigh; }\n  else { kategori='Low'; label='Belum Sesuai'; alasan='Skor '+skor+' < '+ambangLow; }\n  items.push({ json: { ...d, skorLLM: skor, kategori, kategoriLabel: label, alasanKategori: alasan } });\n}\nreturn items;"
       },
       "id": "rule-kategori",
       "name": "Rule Kategori (Code Node)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [0, -200]
+      "position": [
+        -200,
+        -100
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// Fallback LLM: parse response & gabungkan, atau rule-based jika gagal\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const body = d.body || d.json || {};\n  let parsed = null;\n  const raw = (body.choices && body.choices[0] && body.choices[0].message && body.choices[0].message.content) || '';\n  try { parsed = JSON.parse(raw); } catch (_) {\n    const m = raw.match(/\\{[\\s\\S]*\\}/);\n    if (m) { try { parsed = JSON.parse(m[0]); } catch (_2) { parsed = null; } }\n  }\n  let skor = 0, skillTerdeteksi = '', alasan = '', notes = '', errorFlag = d.errorFlag || '';\n  if (parsed) {\n    skor = Number(parsed.skor); if (isNaN(skor)) skor = 0;\n    skillTerdeteksi = Array.isArray(parsed.skill_terdeteksi) ? parsed.skill_terdeteksi.join(', ') : String(parsed.skill_terdeteksi || '');\n    alasan = String(parsed.alasan_llm || '');\n    notes = String(parsed.enrichment_notes || '');\n  } else {\n    errorFlag = 'llm_parse_error';\n  }\n  items.push({ json: { ...d, skorLLM: skor, skillTerdeteksi, alasanSkor: alasan, enrichmentNotes: notes, errorFlag } });\n}\nreturn items;"
+        "jsCode": "// Merge kedua cabang (LLM path + reject path) - sudah punya kategori\nconst items = [];\nfor (const item of $input.all()) {\n  items.push({ json: item.json });\n}\nreturn items;"
       },
-      "id": "parse-llm-response",
-      "name": "Parse LLM Response",
+      "id": "merge-paths",
+      "name": "Merge Paths",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [200, -200]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// Tulis ke Sheets (Data Kandidat). Dedup: cek email+lowongan.\n// Asumsi: Google Sheets node nantinya di-append. Di sini kita siapkan baris.\n\nfunction getVals(d) {\n  return [\n    new Date().toISOString(),      // Timestamp\n    d.nama || '',                  // Nama\n    d.email || '',                 // Email\n    d.noHP || '',                  // No HP\n    d.lowongan || '',              // Lowongan\n    d.urlCV || '',                 // URL CV\n    d.ruleCheck || '',             // Rule Check\n    d.alasanRuleCheck || '',       // Alasan Rule Check\n    d.skillTerdeteksi || '',       // Skill Terdeteksi\n    d.skorLLM ?? '',               // Skor LLM\n    d.alasanSkor || '',            // Alasan Skor\n    d.enrichmentNotes || '',       // Enrichment Notes\n    d.kategori || '',              // Kategori\n    d.alasanKategori || '',        // Alasan Kategori\n    d.kategoriLabel || '',         // Kategori Label\n    'N/A',                         // Status Notifikasi HR\n    'N/A',                         // Status Auto-Reply\n    '',                            // Waktu Auto-Reply\n    d.errorFlag || ''              // Error Flag\n  ];\n}\n\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  items.push({\n    json: {\n      ...d,\n      sheetRow: getVals(d),\n      autoReplyStatus: 'N/A'\n    }\n  });\n}\nreturn items;"
+        "jsCode": "// Dedup Check Flag: actual read dilakukan via Google Sheets Read node sebelum ini\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const isDuplicate = d.dedupCheck === true;\n  items.push({ json: { ...d, isDuplicate, skipWrite: isDuplicate } });\n}\nreturn items;"
+      },
+      "id": "dedup-check",
+      "name": "Dedup Check Flag",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "not-dup",
+              "leftValue": "={{ $json.skipWrite }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "router-dedup",
+      "name": "Duplikat?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Duplicate: skip write, set audit flag\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  items.push({ json: { ...d, auditEventType: 'duplicate_skipped', auditDetail: 'Duplicate email+lowongan within 24h: ' + d.email, autoReplyStatus: 'N/A', notifStatus: 'N/A' } });\n}\nreturn items;"
+      },
+      "id": "handle-duplicate",
+      "name": "Handle Duplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Siapkan baris untuk Google Sheets (19 kolom) - escapeHtml inline\nescapeHtml = function(str) { if (str === undefined || str === null) return ''; return String(str).replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/\"/g, '\"').replace(/'/g, '&#039;'); };\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const row = [\n    new Date().toISOString(),\n    d.nama || '',\n    d.email || '',\n    d.noHP || '',\n    d.lowongan || '',\n    d.urlCV || '',\n    d.ruleCheck || '',\n    d.alasanRuleCheck || '',\n    d.skillTerdeteksi || '',\n    d.skorLLM ?? '',\n    d.alasanSkor || '',\n    d.enrichmentNotes || '',\n    d.kategori || '',\n    d.alasanKategori || '',\n    d.kategoriLabel || '',\n    'N/A',\n    'N/A',\n    '',\n    d.errorFlag || ''\n  ];\n  items.push({ json: { ...d, sheetRow: row, autoReplyStatus: 'N/A', notifStatus: 'N/A', auditEventType: d.auditEventType || 'pipeline_end' } });\n}\nreturn items;"
       },
       "id": "prepare-sheet-row",
       "name": "Siapkan Baris Sheets",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [400, -100]
+      "position": [
+        600,
+        -100
+      ]
     },
     {
       "parameters": {
@@ -177,30 +254,42 @@
             "Error Flag": "={{ $json.sheetRow[18] }}"
           }
         },
-        "options": {}
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 4,
+          "waitBetweenTries": 2000
+        }
       },
       "id": "write-sheets",
       "name": "Tulis ke Google Sheets",
       "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4.5,
-      "position": [600, -100],
+      "typeVersion": "4.5",
+      "position": [
+        800,
+        -100
+      ],
       "credentials": {
-        "googleSheetsOAuth2Api": {
-          "id": "GOOGLE_SHEETS_CREDENTIALS_ID",
-          "name": "Google Sheets (AI HR)"
-        }
+        "googleSheetsOAuth2Api": "Google Sheets (AI HR)"
       }
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
           "conditions": [
             {
               "id": "is-low",
               "leftValue": "={{ $json.kategori }}",
               "rightValue": "Low",
-              "operator": { "type": "string", "operation": "equals" }
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
             }
           ]
         },
@@ -210,47 +299,60 @@
       "name": "Kategori Low?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [800, -100]
+      "position": [
+        1000,
+        -100
+      ]
     },
     {
       "parameters": {
         "to": "={{ $env.HR_EMAIL }}",
         "subject": "={{ '[Lamaran ' + $json.kategori + '] ' + $json.nama + ' - ' + $json.lowongan }}",
         "emailFormat": "html",
-        "message": "={{ '<h3>Kandidat ' + $json.kategori + ' (' + $json.kategoriLabel + ')</h3><table><tr><td><b>Nama</b></td><td>' + $json.nama + '</td></tr><tr><td><b>Email</b></td><td>' + $json.email + '</td></tr><tr><td><b>Lowongan</b></td><td>' + $json.lowongan + '</td></tr><tr><td><b>Kategori</b></td><td>' + $json.kategori + '</td></tr><tr><td><b>Skor</b></td><td>' + $json.skorLLM + '/100</td></tr><tr><td><b>Skill</b></td><td>' + $json.skillTerdeteksi + '</td></tr></table><p><b>Alasan:</b><br>' + $json.alasanSkor + '</p>' }}",
-        "options": {}
+        "message": "={{ '<h3>Kandidat ' + $json.kategori.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + ' (' + $json.kategoriLabel.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + ')</h3><table><tr><td><b>Nama</b></td><td>' + $json.nama.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + '</td></tr><tr><td><b>Email</b></td><td>' + $json.email.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + '</td></tr><tr><td><b>Lowongan</b></td><td>' + $json.lowongan.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + '</td></tr><tr><td><b>Kategori</b></td><td>' + $json.kategori.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + '</td></tr><tr><td><b>Skor</b></td><td>' + $json.skorLLM + '/100</td></tr><tr><td><b>Skill</b></td><td>' + $json.skillTerdeteksi.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + '</td></tr></table><p><b>Alasan:</b><br>' + $json.alasanSkor.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + '</p>' }}",
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 4,
+          "waitBetweenTries": 1000
+        }
       },
       "id": "notif-hr",
       "name": "Notifikasi HR",
       "type": "n8n-nodes-base.gmail",
-      "typeVersion": 2.1,
-      "position": [1000, -150],
+      "typeVersion": "2.1",
+      "position": [
+        1200,
+        -150
+      ],
       "credentials": {
-        "gmailOAuth2": {
-          "id": "GMAIL_CREDENTIALS_ID",
-          "name": "Gmail (AI HR)"
-        }
+        "gmailOAuth2": "Gmail (AI HR)"
       }
     },
     {
       "parameters": {
-        "jsCode": "// Kategori -> status email yang harus dikirim\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  let notifStatus = 'N/A';\n  let autoReplyStatus = 'N/A';\n  if (d.kategori === 'High' || d.kategori === 'Medium') { notifStatus = 'Perlu'; autoReplyStatus = 'N/A'; }\n  else if (d.kategori === 'Low') { notifStatus = 'N/A'; autoReplyStatus = 'Pending'; }\n  items.push({ json: { ...d, notifStatus, autoReplyStatus } });\n}\nreturn items;"
+        "jsCode": "// Kategori -> status email\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  let notifStatus = 'N/A', autoReplyStatus = 'N/A';\n  if (d.kategori === 'High' || d.kategori === 'Medium') { notifStatus = 'Perlu'; autoReplyStatus = 'N/A'; }\n  else if (d.kategori === 'Low') { notifStatus = 'N/A'; autoReplyStatus = 'Pending'; }\n  items.push({ json: { ...d, notifStatus, autoReplyStatus, auditEventType: d.auditEventType || 'pipeline_end' } });\n}\nreturn items;"
       },
       "id": "set-email-status",
       "name": "Set Status Email",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [800, 200]
+      "position": [
+        1000,
+        150
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// Tulis Audit Log (append-only)\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  items.push({\n    json: {\n      timestamp: new Date().toISOString(),\n      eventType: d.eventType || 'pipeline_end',\n      emailKandidat: d.email || '',\n      lowongan: d.lowongan || '',\n      detail: 'Kandidat ' + (d.nama || '') + ' → kategori ' + (d.kategori || '') + ' (skor ' + (d.skorLLM ?? '') + ')',\n      status: 'Success'\n    }\n  });\n}\nreturn items;"
+        "jsCode": "// Tulis Audit Log (append-only)\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  items.push({\n    json: {\n      timestamp: new Date().toISOString(),\n      eventType: d.auditEventType || 'pipeline_end',\n      emailKandidat: d.email || '',\n      lowongan: d.lowongan || '',\n      detail: 'Kandidat ' + (d.nama || '') + ' → kategori ' + (d.kategori || '') + ' (skor ' + (d.skorLLM ?? '') + ')',\n      status: 'Success'\n    }\n  });\n}\nreturn items;"
       },
       "id": "build-audit-row",
       "name": "Build Audit Row",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1000, 0]
+      "position": [
+        1200,
+        100
+      ]
     },
     {
       "parameters": {
@@ -272,57 +374,302 @@
             "Status": "={{ $json.status }}"
           }
         },
-        "options": {}
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 4,
+          "waitBetweenTries": 2000
+        }
       },
       "id": "append-audit-log",
       "name": "Tulis Audit Log (Sheets)",
       "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4.5,
-      "position": [1200, 0],
+      "typeVersion": "4.5",
+      "position": [
+        1400,
+        100
+      ],
       "credentials": {
-        "googleSheetsOAuth2Api": {
-          "id": "GOOGLE_SHEETS_CREDENTIALS_ID",
-          "name": "Google Sheets (AI HR)"
-        }
+        "googleSheetsOAuth2Api": "Google Sheets (AI HR)"
       }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Sheets Write Error Handler: buffer fallback + audit\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const error = d.error || d.lastError || 'Unknown sheets error';\n  const bufferEntry = {\n    timestamp: new Date().toISOString(),\n    kandidat_email: d.email || '',\n    lowongan: d.lowongan || '',\n    data: { ...d, sheetRow: d.sheetRow },\n    retry_count: 0,\n    max_retry: 10,\n    next_retry: new Date(Date.now() + 5*60*1000).toISOString()\n  };\n  items.push({\n    json: {\n      ...d,\n      bufferEntry: JSON.stringify(bufferEntry),\n      auditEventType: 'buffer_written',\n      auditDetail: 'Sheets write failed, buffered: ' + error,\n      notifStatus: 'N/A',\n      autoReplyStatus: 'N/A'\n    }\n  });\n}\nreturn items;"
+      },
+      "id": "sheets-error-handler",
+      "name": "Sheets Error Handler (Buffer)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyHour"
+            }
+          ]
+        }
+      },
+      "id": "error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        600,
+        -250
+      ]
     }
   ],
   "connections": {
-    "Trig Perubahan Response Form": { "main": [[{ "node": "Download CV dari Drive", "type": "main", "index": 0 }]] },
-    "Download CV dari Drive": { "main": [[{ "node": "Parse CV (Code Node)", "type": "main", "index": 0 }]] },
-    "Parse CV (Code Node)": { "main": [[{ "node": "Rule Check (Code Node)", "type": "main", "index": 0 }]] },
-    "Rule Check (Code Node)": { "main": [[{ "node": "Rule Check Lolos?", "type": "main", "index": 0 }]] },
+    "Trig Perubahan Response Form": {
+      "main": [
+        [
+          {
+            "node": "Download CV dari Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download CV dari Drive": {
+      "main": [
+        [
+          {
+            "node": "Parse CV (Code Node)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse CV (Code Node)": {
+      "main": [
+        [
+          {
+            "node": "Rule Check (Code Node)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rule Check (Code Node)": {
+      "main": [
+        [
+          {
+            "node": "Rule Check Lolos?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Rule Check Lolos?": {
       "main": [
         [
-          { "node": "LLM Enrichment + Scoring", "type": "main", "index": 0 }
+          {
+            "node": "LLM Scoring (Code Node + Retry)",
+            "type": "main",
+            "index": 0
+          }
         ],
         [
-          { "node": "Set Skor 0 (Reject)", "type": "main", "index": 0 }
+          {
+            "node": "Set Skor 0 (Reject)",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
-    "LLM Enrichment + Scoring": { "main": [[{ "node": "Parse LLM Response", "type": "main", "index": 0 }]] },
-    "Parse LLM Response": { "main": [[{ "node": "Rule Kategori (Code Node)", "type": "main", "index": 0 }]] },
-    "Rule Kategori (Code Node)": { "main": [[{ "node": "Siapkan Baris Sheets", "type": "main", "index": 0 }]] },
-    "Set Skor 0 (Reject)": { "main": [[{ "node": "Siapkan Baris Sheets", "type": "main", "index": 0 }]] },
-    "Siapkan Baris Sheets": { "main": [[{ "node": "Tulis ke Google Sheets", "type": "main", "index": 0 }]] },
-    "Tulis ke Google Sheets": { "main": [[{ "node": "Kategori Low?", "type": "main", "index": 0 }]] },
+    "LLM Scoring (Code Node + Retry)": {
+      "main": [
+        [
+          {
+            "node": "Rule Kategori (Code Node)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rule Kategori (Code Node)": {
+      "main": [
+        [
+          {
+            "node": "Merge Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Skor 0 (Reject)": {
+      "main": [
+        [
+          {
+            "node": "Merge Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Paths": {
+      "main": [
+        [
+          {
+            "node": "Dedup Check Flag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedup Check Flag": {
+      "main": [
+        [
+          {
+            "node": "Duplikat?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplikat?": {
+      "main": [
+        [
+          {
+            "node": "Handle Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Siapkan Baris Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Build Audit Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Siapkan Baris Sheets": {
+      "main": [
+        [
+          {
+            "node": "Tulis ke Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tulis ke Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Kategori Low?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Kategori Low?": {
       "main": [
         [
-          { "node": "Set Status Email", "type": "main", "index": 0 }
+          {
+            "node": "Set Status Email",
+            "type": "main",
+            "index": 0
+          }
         ],
         [
-          { "node": "Notifikasi HR", "type": "main", "index": 0 }
+          {
+            "node": "Notifikasi HR",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
-    "Notifikasi HR": { "main": [[{ "node": "Set Status Email", "type": "main", "index": 0 }]] },
-    "Set Status Email": { "main": [[{ "node": "Build Audit Row", "type": "main", "index": 0 }]] },
-    "Build Audit Row": { "main": [[{ "node": "Tulis Audit Log (Sheets)", "type": "main", "index": 0 }]] }
+    "Notifikasi HR": {
+      "main": [
+        [
+          {
+            "node": "Set Status Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Status Email": {
+      "main": [
+        [
+          {
+            "node": "Build Audit Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Audit Row": {
+      "main": [
+        [
+          {
+            "node": "Tulis Audit Log (Sheets)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheets Error Handler (Buffer)": {
+      "main": [
+        [
+          {
+            "node": "Build Audit Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Sheets Error Handler (Buffer)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "errorWorkflow": "error-workflow"
   }
 }

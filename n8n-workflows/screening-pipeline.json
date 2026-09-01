@@ -152,7 +152,32 @@
     },
     {
       "parameters": {
-        "jsCode": "// Dedup Check Flag: actual read dilakukan via Google Sheets Read node sebelum ini\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const isDuplicate = d.dedupCheck === true;\n  items.push({ json: { ...d, isDuplicate, skipWrite: isDuplicate } });\n}\nreturn items;"
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.SHEET_ID_DATA_KANDIDAT }}",
+          "mode": "id"
+        },
+        "sheetName": "Data Kandidat",
+        "options": {},
+        "range": "A:S",
+        "returnAll": true
+      },
+      "id": "sheets-read-existing",
+      "name": "Baca Data Existing (Sheets)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": "4.5",
+      "position": [
+        300,
+        50
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": "Google Sheets (AI HR)"
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Dedup Check: lookup email+lowongan dari data existing\nconst allRows = $input.first().json;\nconst rows = Array.isArray(allRows) ? allRows : [allRows];\n\nconst now = Date.now();\nconst dayMs = 24 * 60 * 60 * 1000;\nconst existingSet = new Set();\nfor (const row of rows) {\n  const email = String(row.Email || row.email || row.C || '').trim().toLowerCase();\n  const lowongan = String(row.Lowongan || row.lowongan || row.E || '').trim().toLowerCase();\n  const ts = new Date(row.Timestamp || row.timestamp || row.A || 0).getTime();\n  if (email && lowongan && !isNaN(ts) && (now - ts) < dayMs) {\n    existingSet.add(email + '|' + lowongan);\n  }\n}\n\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const email = String(d.email || '').trim().toLowerCase();\n  const lowongan = String(d.lowongan || '').trim().toLowerCase();\n  const key = email + '|' + lowongan;\n  const isDuplicate = existingSet.has(key);\n  items.push({ json: { ...d, isDuplicate, skipWrite: isDuplicate } });\n}\nreturn items;"
       },
       "id": "dedup-check",
       "name": "Dedup Check Flag",
@@ -210,7 +235,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Siapkan baris untuk Google Sheets (19 kolom) - escapeHtml inline\nescapeHtml = function(str) { if (str === undefined || str === null) return ''; return String(str).replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/\"/g, '\"').replace(/'/g, '&#039;'); };\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const row = [\n    new Date().toISOString(),\n    d.nama || '',\n    d.email || '',\n    d.noHP || '',\n    d.lowongan || '',\n    d.urlCV || '',\n    d.ruleCheck || '',\n    d.alasanRuleCheck || '',\n    d.skillTerdeteksi || '',\n    d.skorLLM ?? '',\n    d.alasanSkor || '',\n    d.enrichmentNotes || '',\n    d.kategori || '',\n    d.alasanKategori || '',\n    d.kategoriLabel || '',\n    'N/A',\n    'N/A',\n    '',\n    d.errorFlag || ''\n  ];\n  items.push({ json: { ...d, sheetRow: row, autoReplyStatus: 'N/A', notifStatus: 'N/A', auditEventType: d.auditEventType || 'pipeline_end' } });\n}\nreturn items;"
+        "jsCode": "// Siapkan baris untuk Google Sheets (19 kolom)\nfunction escapeHtml(str) {\n  if (str === undefined || str === null) return '';\n  return String(str)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#039;');\n}\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const row = [\n    new Date().toISOString(), d.nama||'', d.email||'', d.noHP||'',\n    d.lowongan||'', d.urlCV||'', d.ruleCheck||'', d.alasanRuleCheck||'',\n    d.skillTerdeteksi||'', d.skorLLM??'', d.alasanSkor||'',\n    d.enrichmentNotes||'', d.kategori||'', d.alasanKategori||'',\n    d.kategoriLabel||'', 'N/A', 'N/A', '', d.errorFlag||''\n  ];\n  items.push({ json: { ...d, sheetRow: row, autoReplyStatus: 'N/A', notifStatus: 'N/A', auditEventType: d.auditEventType || 'pipeline_end' } });\n}\nreturn items;"
       },
       "id": "prepare-sheet-row",
       "name": "Siapkan Baris Sheets",
@@ -309,7 +334,7 @@
         "to": "={{ $env.HR_EMAIL }}",
         "subject": "={{ '[Lamaran ' + $json.kategori + '] ' + $json.nama + ' - ' + $json.lowongan }}",
         "emailFormat": "html",
-        "message": "={{ '<h3>Kandidat ' + $json.kategori.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + ' (' + $json.kategoriLabel.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + ')</h3><table><tr><td><b>Nama</b></td><td>' + $json.nama.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + '</td></tr><tr><td><b>Email</b></td><td>' + $json.email.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + '</td></tr><tr><td><b>Lowongan</b></td><td>' + $json.lowongan.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + '</td></tr><tr><td><b>Kategori</b></td><td>' + $json.kategori.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + '</td></tr><tr><td><b>Skor</b></td><td>' + $json.skorLLM + '/100</td></tr><tr><td><b>Skill</b></td><td>' + $json.skillTerdeteksi.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + '</td></tr></table><p><b>Alasan:</b><br>' + $json.alasanSkor.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + '</p>' }}",
+        "message": "={{ '<h3>Kandidat ' + $json.kategori.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + ' (' + $json.kategoriLabel.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + ')</h3>' + '<table>' + '<tr><td><b>Nama</b></td><td>' + $json.nama.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + '</td></tr>' + '<tr><td><b>Email</b></td><td>' + $json.email.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + '</td></tr>' + '<tr><td><b>Lowongan</b></td><td>' + $json.lowongan.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + '</td></tr>' + '<tr><td><b>Kategori</b></td><td>' + $json.kategori.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + ' (' + $json.kategoriLabel.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + ')</td></tr>' + '<tr><td><b>Skor</b></td><td>' + $json.skorLLM + '/100</td></tr>' + '<tr><td><b>Skill</b></td><td>' + $json.skillTerdeteksi.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + '</td></tr>' + '</table>' + '<p><b>Alasan:</b><br>' + $json.alasanSkor.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + '</p>' }}",
         "options": {
           "retryOnFail": true,
           "maxTries": 4,
@@ -525,7 +550,7 @@
       "main": [
         [
           {
-            "node": "Dedup Check Flag",
+            "node": "Baca Data Existing (Sheets)",
             "type": "main",
             "index": 0
           }
@@ -661,6 +686,17 @@
         [
           {
             "node": "Sheets Error Handler (Buffer)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Baca Data Existing (Sheets)": {
+      "main": [
+        [
+          {
+            "node": "Dedup Check Flag",
             "type": "main",
             "index": 0
           }

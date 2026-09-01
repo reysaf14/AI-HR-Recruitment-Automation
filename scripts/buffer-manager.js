@@ -71,6 +71,10 @@ function safePath(filename) {
  * @returns {object} - { ok, filename, path }
  */
 function bufferWrite(data, options = {}) {
+  // Guard: tolak null/undefined/non-object
+  if (!data || typeof data !== 'object') {
+    return { ok: false, error: 'Invalid data: expected object, got ' + typeof data };
+  }
   const maxRetry = options.maxRetry || DEFAULT_MAX_RETRY;
   const retryIntervalMs = options.retryIntervalMs || RETRY_INTERVAL_MS;
 

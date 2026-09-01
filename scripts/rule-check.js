@@ -109,7 +109,16 @@ function ruleCheck(cvText, kriteriaWajib, lowonganNama = '') {
   }
 
   const kriteriaList = Array.isArray(kriteriaWajib)
-    ? kriteriaWajib.map((k) => ({ tipe: 'skill', nilai: String(k) }))
+    ? kriteriaWajib.map((k) => {
+        // Strip prefiks tipe untuk array input (sama seperti parseKriteriaWajib)
+        const lower = String(k).toLowerCase();
+        let tipe = 'skill';
+        let nilai = String(k);
+        if (lower.startsWith('skill:')) { tipe = 'skill'; nilai = String(k).slice(6).trim(); }
+        else if (lower.startsWith('pengalaman:')) { tipe = 'experience'; nilai = String(k).slice(11).trim(); }
+        else if (lower.startsWith('pendidikan:')) { tipe = 'education'; nilai = String(k).slice(11).trim(); }
+        return { tipe, nilai };
+      })
     : parseKriteriaWajib(kriteriaWajib);
 
   if (kriteriaList.length === 0) {

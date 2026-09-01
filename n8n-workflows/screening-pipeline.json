@@ -169,7 +169,7 @@
       "typeVersion": "4.5",
       "position": [
         300,
-        50
+        200
       ],
       "credentials": {
         "googleSheetsOAuth2Api": "Google Sheets (AI HR)"
@@ -177,7 +177,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Dedup Check: lookup email+lowongan dari data existing\nconst allRows = $input.first().json;\nconst rows = Array.isArray(allRows) ? allRows : [allRows];\n\nconst now = Date.now();\nconst dayMs = 24 * 60 * 60 * 1000;\nconst existingSet = new Set();\nfor (const row of rows) {\n  const email = String(row.Email || row.email || row.C || '').trim().toLowerCase();\n  const lowongan = String(row.Lowongan || row.lowongan || row.E || '').trim().toLowerCase();\n  const ts = new Date(row.Timestamp || row.timestamp || row.A || 0).getTime();\n  if (email && lowongan && !isNaN(ts) && (now - ts) < dayMs) {\n    existingSet.add(email + '|' + lowongan);\n  }\n}\n\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const email = String(d.email || '').trim().toLowerCase();\n  const lowongan = String(d.lowongan || '').trim().toLowerCase();\n  const key = email + '|' + lowongan;\n  const isDuplicate = existingSet.has(key);\n  items.push({ json: { ...d, isDuplicate, skipWrite: isDuplicate } });\n}\nreturn items;"
+        "jsCode": "// Dedup Check: kandidat dari jalur utama + lookup existing via node ref\n// Kandidat = $input (dari Merge Paths langsung)\n// Existing sheets = $('Baca Data Existing (Sheets)') (node paralel)\n\n// Ambil data existing (baris sheets) via node reference\nconst existingNode = $('Baca Data Existing (Sheets)');\nconst existingRows = existingNode ? existingNode.all() : [];\n\n// Build lookup set: email+lowongan dalam 24 jam\nconst now = Date.now();\nconst dayMs = 24 * 60 * 60 * 1000;\nconst existingSet = new Set();\nfor (const row of existingRows) {\n  const j = row.json;\n  const email = String(j.Email || j.email || j.C || '').trim().toLowerCase();\n  const lowongan = String(j.Lowongan || j.lowongan || j.E || '').trim().toLowerCase();\n  const ts = new Date(j.Timestamp || j.timestamp || j.A || 0).getTime();\n  if (email && lowongan && !isNaN(ts) && (now - ts) < dayMs) {\n    existingSet.add(email + '|' + lowongan);\n  }\n}\n\n// Iterasi = KANDIDAT dari jalur utama\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const email = String(d.email || '').trim().toLowerCase();\n  const lowongan = String(d.lowongan || '').trim().toLowerCase();\n  const key = email + '|' + lowongan;\n  const isDuplicate = existingSet.has(key);\n  items.push({ json: { ...d, isDuplicate, skipWrite: isDuplicate } });\n}\nreturn items;"
       },
       "id": "dedup-check",
       "name": "Dedup Check Flag",
@@ -550,6 +550,13 @@
       "main": [
         [
           {
+            "node": "Dedup Check Flag",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Baca Data Existing (Sheets)",
             "type": "main",
             "index": 0
@@ -686,17 +693,6 @@
         [
           {
             "node": "Sheets Error Handler (Buffer)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Baca Data Existing (Sheets)": {
-      "main": [
-        [
-          {
-            "node": "Dedup Check Flag",
             "type": "main",
             "index": 0
           }

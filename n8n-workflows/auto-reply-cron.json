@@ -1,0 +1,428 @@
+{
+  "name": "Auto-Reply Cron - AI HR Recruitment",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyDay",
+              "hour": 9,
+              "minute": 0
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Cron Harian 09:00",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        -800,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.SHEET_ID_DATA_KANDIDAT }}",
+          "mode": "id"
+        },
+        "sheetName": "Data Kandidat",
+        "options": {},
+        "range": "A:S",
+        "returnAll": true
+      },
+      "id": "read-sheets",
+      "name": "Baca Data Kandidat (Sheets)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": "4.5",
+      "position": [
+        -600,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": "Google Sheets (AI HR)"
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter kandidat: Kategori = Low AND Status Auto-Reply = Pending\nconst items = [];\nconst threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);\n\nfor (const item of $input.all()) {\n  const row = item.json;\n  // Columns: A=Timestamp, B=Nama, C=Email, D=No HP, E=Lowongan, F=URL CV,\n  // G=Rule Check, H=Alasan Rule Check, I=Skill Terdeteksi, J=Skor LLM,\n  // K=Alasan Skor, L=Enrichment Notes, M=Kategori, N=Alasan Kategori,\n  // O=Kategori Label, P=Status Notifikasi HR, Q=Status Auto-Reply, R=Waktu Auto-Reply, S=Error Flag\n  \n  const kategori = row.M || row['Kategori'] || '';\n  const autoReplyStatus = row.Q || row['Status Auto-Reply'] || '';\n  const timestampStr = row.A || row['Timestamp'] || '';\n  \n  if (kategori === 'Low' && autoReplyStatus === 'Pending') {\n    const ts = new Date(timestampStr);\n    if (!isNaN(ts.getTime()) && ts <= threeDaysAgo) {\n      items.push({ json: { ...row, _rowIndex: item.index + 2, _shouldSend: true } }); // +2 karena header + 1-based\n    } else {\n      items.push({ json: { ...row, _rowIndex: item.index + 2, _shouldSend: false, _skipReason: 'Belum 3 hari' } });\n    }\n  } else {\n    items.push({ json: { ...row, _rowIndex: item.index + 2, _shouldSend: false, _skipReason: 'Bukan Low/Pending' } });\n  }\n}\nreturn items;"
+      },
+      "id": "filter-candidates",
+      "name": "Filter Low + Pending + 3 Hari",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "should-send",
+              "leftValue": "={{ $json._shouldSend }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "router-send",
+      "name": "Kirim Auto-Reply?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "to": "={{ $json.C || $json.Email }}",
+        "subject": "={{ 'Informasi Lamaran - ' + ($json.E || $json.Lowongan) }}",
+        "emailFormat": "html",
+        "message": "={{ '<p>Halo ' + ($json.B || $json.Nama || 'Calon Kandidat').replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + ',</p><p>Terima kasih telah melamar posisi ' + ($json.E || $json.Lowongan || '').replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>') + '.</p><p>Kami telah meninjau lamaran Anda dengan saksama. Pada tahap seleksi ini, kami menilai profil Anda belum sesuai dengan kriteria yang dibutuhkan untuk posisi tersebut.</p><p>Kami sangat menghargai waktu dan minat Anda untuk bergabung dengan kami. Kami berharap Anda sukses dalam perjalanan karier dan semoga kita dapat bekerja sama di kesempatan lain.</p><p>Salam hangat,<br>Tim Rekrutmen</p>' }}",
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 4,
+          "waitBetweenTries": 1000
+        }
+      },
+      "id": "send-auto-reply",
+      "name": "Kirim Auto-Reply Tolak",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": "2.1",
+      "position": [
+        0,
+        -100
+      ],
+      "credentials": {
+        "gmailOAuth2": "Gmail (AI HR)"
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.SHEET_ID_DATA_KANDIDAT }}",
+          "mode": "id"
+        },
+        "sheetName": "Data Kandidat",
+        "range": "={{ 'Q' + $json._rowIndex + ':R' + $json._rowIndex }}",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Status Auto-Reply": "Terkirim",
+            "Waktu Auto-Reply": "={{ new Date().toISOString() }}"
+          }
+        },
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 4,
+          "waitBetweenTries": 2000
+        }
+      },
+      "id": "update-status",
+      "name": "Update Status Auto-Reply",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": "4.5",
+      "position": [
+        200,
+        -100
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": "Google Sheets (AI HR)"
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Handle gagal kirim: update status Gagal + audit\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const error = d.error || d.lastError || 'Unknown email error';\n  items.push({\n    json: {\n      ...d,\n      auditEventType: 'auto_reply',\n      auditDetail: 'Auto-reply gagal: ' + error,\n      _updateStatus: 'Gagal',\n      _updateWaktu: new Date().toISOString()\n    }\n  });\n}\nreturn items;"
+      },
+      "id": "handle-email-fail",
+      "name": "Handle Email Gagal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        150
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.SHEET_ID_DATA_KANDIDAT }}",
+          "mode": "id"
+        },
+        "sheetName": "Data Kandidat",
+        "range": "={{ 'Q' + $json._rowIndex + ':R' + $json._rowIndex }}",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Status Auto-Reply": "={{ $json._updateStatus }}",
+            "Waktu Auto-Reply": "={{ $json._updateWaktu }}"
+          }
+        },
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 4,
+          "waitBetweenTries": 2000
+        }
+      },
+      "id": "update-status-fail",
+      "name": "Update Status Gagal",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": "4.5",
+      "position": [
+        200,
+        150
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": "Google Sheets (AI HR)"
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build Audit Row untuk auto-reply\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const status = d._updateStatus || 'Success';\n  const detail = status === 'Success'\n    ? 'Auto-reply terkirim ke ' + (d.C || d.Email)\n    : 'Auto-reply gagal: ' + (d.auditDetail || 'Unknown error');\n  items.push({\n    json: {\n      timestamp: new Date().toISOString(),\n      eventType: 'auto_reply',\n      emailKandidat: d.C || d.Email || '',\n      lowongan: d.E || d.Lowongan || '',\n      detail: detail,\n      status: status\n    }\n  });\n}\nreturn items;"
+      },
+      "id": "build-audit-auto",
+      "name": "Build Audit Auto-Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        -50
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.SHEET_ID_AUDIT_LOG }}",
+          "mode": "id"
+        },
+        "sheetName": "Audit Log",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $json.timestamp }}",
+            "Event Type": "={{ $json.eventType }}",
+            "Email Kandidat": "={{ $json.emailKandidat }}",
+            "Lowongan": "={{ $json.lowongan }}",
+            "Detail": "={{ $json.detail }}",
+            "Status": "={{ $json.status }}"
+          }
+        },
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 4,
+          "waitBetweenTries": 2000
+        }
+      },
+      "id": "append-audit-auto",
+      "name": "Tulis Audit Auto-Reply (Sheets)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": "4.5",
+      "position": [
+        600,
+        -50
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": "Google Sheets (AI HR)"
+      }
+    },
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyHour"
+            }
+          ]
+        }
+      },
+      "id": "error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        -250
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Error Handler untuk cron: log error ke audit\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const error = d.error || d.lastError || 'Unknown cron error';\n  items.push({\n    json: {\n      timestamp: new Date().toISOString(),\n      eventType: 'error',\n      emailKandidat: d.C || d.Email || '',\n      lowongan: d.E || d.Lowongan || '',\n      detail: 'Cron auto-reply error: ' + error,\n      status: 'Failed'\n    }\n  });\n}\nreturn items;"
+      },
+      "id": "cron-error-handler",
+      "name": "Cron Error Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        -250
+      ]
+    }
+  ],
+  "connections": {
+    "Cron Harian 09:00": {
+      "main": [
+        [
+          {
+            "node": "Baca Data Kandidat (Sheets)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Baca Data Kandidat (Sheets)": {
+      "main": [
+        [
+          {
+            "node": "Filter Low + Pending + 3 Hari",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Low + Pending + 3 Hari": {
+      "main": [
+        [
+          {
+            "node": "Kirim Auto-Reply?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kirim Auto-Reply?": {
+      "main": [
+        [
+          {
+            "node": "Kirim Auto-Reply Tolak",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Audit Auto-Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kirim Auto-Reply Tolak": {
+      "main": [
+        [
+          {
+            "node": "Update Status Auto-Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Email Gagal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Status Auto-Reply": {
+      "main": [
+        [
+          {
+            "node": "Build Audit Auto-Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Email Gagal": {
+      "main": [
+        [
+          {
+            "node": "Update Status Gagal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Status Gagal": {
+      "main": [
+        [
+          {
+            "node": "Build Audit Auto-Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Audit Auto-Reply": {
+      "main": [
+        [
+          {
+            "node": "Tulis Audit Auto-Reply (Sheets)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Cron Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cron Error Handler": {
+      "main": [
+        [
+          {
+            "node": "Tulis Audit Auto-Reply (Sheets)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta",
+    "errorWorkflow": "error-workflow"
+  }
+}

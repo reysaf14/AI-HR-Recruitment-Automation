@@ -17,13 +17,24 @@ const { buildAuditRow, logToBuffer, EVENT_TYPES, STATUS_VALID } = require('../sc
 const { hrNotificationEmail, autoReplyRejectEmail, escapeHtml } = require('../scripts/email-templates.js');
 
 let passed = 0, failed = 0, total = 0;
+const pendingTests = [];
 
 function test(name, fn) {
   total++;
   try {
-    fn();
-    passed++;
-    console.log('  ✅ ' + name);
+    const result = fn();
+    if (result && typeof result.then === 'function') {
+      pendingTests.push(Promise.resolve(result).then(() => {
+        passed++;
+        console.log('  ✅ ' + name);
+      }).catch((e) => {
+        failed++;
+        console.log('  ❌ ' + name + ': ' + e.message);
+      }));
+    } else {
+      passed++;
+      console.log('  ✅ ' + name);
+    }
   } catch (e) {
     failed++;
     console.log('  ❌ ' + name + ': ' + e.message);
@@ -40,6 +51,17 @@ console.log('--- PHASE 1: Form Input → Parse CV ---');
 
 test('parseCV: exists as function', () => {
   assert.strictEqual(typeof parseCV, 'function');
+});
+
+test('parseCV: parse TXT kandidat nyata', async () => {
+  const result = await parseCV(
+    Buffer.from('B2B sales, CRM, pengalaman 3 tahun, pendidikan S1.'),
+    'text/plain',
+    'candidate.txt'
+  );
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.fileType, 'txt');
+  assert.ok(result.text.includes('B2B sales'));
 });
 
 console.log('');
@@ -115,6 +137,20 @@ test('fallbackRuleScoring: sebagian cocok', () => {
   });
   assert.ok(r.skor >= 0 && r.skor <= 100);
   assert.ok(r.skor < 100);
+});
+
+test('llmScoring: config kosong → fallback rule-based', async () => {
+  const r = await llmScoring(
+    'B2B sales CRM pengalaman 3 tahun pendidikan S1',
+    {
+      kriteria: ['B2B', 'CRM', 'pengalaman: 3 tahun', 'pendidikan: S1'],
+      bobot: { skill: 0.4, experience: 0.35, education: 0.25 },
+    },
+    { apiKey: '', apiUrl: '' }
+  );
+  assert.strictEqual(r.fallback, true);
+  assert.strictEqual(r.skor, 100);
+  assert.strictEqual(r.errorFlag, 'llm_config_missing');
 });
 
 test('normalizeScore: edge cases', () => {
@@ -343,9 +379,11 @@ console.log('');
 // ============================================================
 // SUMMARY
 // ============================================================
-console.log('=== RINGKASAN ===');
-console.log('Total: ' + total);
-console.log('Passed: ' + passed);
-console.log('Failed: ' + failed);
-console.log('Status: ' + (failed === 0 ? '✅ ALL PASS' : '❌ ' + failed + ' FAILED'));
-process.exit(failed > 0 ? 1 : 0);
+Promise.all(pendingTests).then(() => {
+  console.log('=== RINGKASAN ===');
+  console.log('Total: ' + total);
+  console.log('Passed: ' + passed);
+  console.log('Failed: ' + failed);
+  console.log('Status: ' + (failed === 0 ? '✅ ALL PASS' : '❌ ' + failed + ' FAILED'));
+  process.exit(failed > 0 ? 1 : 0);
+});

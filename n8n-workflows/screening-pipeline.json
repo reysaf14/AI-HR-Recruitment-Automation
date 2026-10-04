@@ -1,4 +1,5 @@
 {
+  "id": "ai-hr-screening-pipeline",
   "name": "Screening Pipeline Utama - AI HR Recruitment",
   "nodes": [
     {
@@ -42,7 +43,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Parse CV: extract text dari PDF/DOCX/TXT\nfunction detectType(buffer, filename) {\n  const nameLower = (filename || '').toLowerCase();\n  if (buffer.length >= 4) {\n    if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) return 'pdf';\n    if (buffer[0] === 0x50 && buffer[1] === 0x4B) return 'docx';\n  }\n  if (nameLower.endsWith('.pdf')) return 'pdf';\n  if (nameLower.endsWith('.docx')) return 'docx';\n  if (nameLower.endsWith('.txt')) return 'txt';\n  return 'unsupported';\n}\nfunction extractTextPdf(buf) {\n  const t = buf.toString('utf8');\n  const m = t.match(/[\\x20-\\x7E]{4,}/g);\n  return m ? m.join(' ') : '';\n}\nconst items = [];\nfor (const item of $input.all()) {\n  const raw = item.json;\n  const fileBuffer = raw.file && raw.file.data ? Buffer.from(raw.file.data, 'base64') : Buffer.alloc(0);\n  const filename = (raw.file && (raw.file.fileName || raw.file.name)) || '';\n  const type = detectType(fileBuffer, filename);\n  let textCV = '', errorFlag = '';\n  if (type === 'pdf') { textCV = extractTextPdf(fileBuffer); if (!textCV.trim()) { errorFlag = 'parse_error'; textCV = ''; } }\n  else if (type === 'docx') { textCV = ''; errorFlag = 'parse_error'; }\n  else if (type === 'txt') { textCV = fileBuffer.toString('utf8'); }\n  else { errorFlag = 'format_unsupported'; textCV = ''; }\n  items.push({ json: { ...raw, textCV, cvFileType: type, parseErrorFlag: errorFlag } });\n}\nreturn items;"
+        "jsCode": "return (async () => {\n// Parse CV: read n8n binary data from memory or filesystem-v2 storage.\nfunction detectType(buffer, filename) {\n  const nameLower = (filename || '').toLowerCase();\n  if (buffer.length >= 4) {\n    if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) return 'pdf';\n    if (buffer[0] === 0x50 && buffer[1] === 0x4B) return 'docx';\n  }\n  if (nameLower.endsWith('.pdf')) return 'pdf';\n  if (nameLower.endsWith('.docx')) return 'docx';\n  if (nameLower.endsWith('.txt')) return 'txt';\n  return 'unsupported';\n}\nfunction extractTextPdf(buf) {\n  const t = buf.toString('utf8');\n  const m = t.match(/[\\x20-\\x7E]{4,}/g);\n  return m ? m.join(' ') : '';\n}\nconst inputItems = $input.all();\nconst items = [];\nfor (let index = 0; index < inputItems.length; index++) {\n  const item = inputItems[index];\n  const raw = item.json || {};\n  let fileBuffer = Buffer.alloc(0);\n  if (raw.file?.data && raw.file.data !== 'filesystem-v2') {\n    fileBuffer = Buffer.from(raw.file.data, 'base64');\n  } else if (item.binary?.data) {\n    fileBuffer = await this.helpers.getBinaryDataBuffer(index, 'data');\n  }\n  const filename = raw.file?.fileName || raw.file?.name || item.binary?.data?.fileName || '';\n  const type = detectType(fileBuffer, filename);\n  let textCV = '', errorFlag = '';\n  if (type === 'pdf') { textCV = extractTextPdf(fileBuffer); if (!textCV.trim()) { errorFlag = 'parse_error'; textCV = ''; } }\n  else if (type === 'docx') { textCV = ''; errorFlag = 'parse_error'; }\n  else if (type === 'txt') { textCV = fileBuffer.toString('utf8'); }\n  else { errorFlag = 'format_unsupported'; textCV = ''; }\n  items.push({ json: { ...raw, textCV, cvFileType: type, parseErrorFlag: errorFlag } });\n}\nreturn items;\n})();"
       },
       "id": "parse-cv",
       "name": "Parse CV (Code Node)",
@@ -55,7 +56,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Rule Check - Syarat Wajib (Tahap 1)\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const textCV = (d.textCV || '').toLowerCase();\n  const kriteria = Array.isArray(d.kriteria) ? d.kriteria : [];\n  let terpenuhi = true;\n  const terpenuhiList = [], gagalList = [];\n  for (const k of kriteria) {\n    const key = String(k).toLowerCase().replace(/[.\\s]/g, '');\n    if (key && textCV.includes(key)) terpenuhiList.push(k);\n    else { terpenuhi = false; gagalList.push(k); }\n  }\n  const ruleCheck = terpenuhi ? 'Memenuhi' : 'Tidak Memenuhi';\n  const alasan = terpenuhi ? 'Semua kriteria wajib terpenuhi' : 'Kriteria tidak terpenuhi: ' + gagalList.join(', ');\n  items.push({ json: { ...d, ruleCheck, alasanRuleCheck: alasan, kriteriaTerpenuhi: terpenuhiList, kriteriaGagal: gagalList } });\n}\nreturn items;"
+        "jsCode": "// Rule Check - normalisasi konsisten untuk kriteria dan CV\nconst normalize = (value) => String(value ?? '')\n  .toLowerCase()\n  .replace(/[^\\w\\s+#]/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .trim();\nconst cleanCriterion = (value) => {\n  let criterion = String(value ?? '').trim();\n  const lower = criterion.toLowerCase();\n  if (lower.startsWith('skill:')) criterion = criterion.slice(6).trim();\n  else if (lower.startsWith('pengalaman:')) criterion = criterion.slice(11).trim();\n  else if (lower.startsWith('pendidikan:')) criterion = criterion.slice(11).trim();\n  return criterion;\n};\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const textCV = normalize(d.textCV || '');\n  const compactCV = textCV.replace(/\\s/g, '');\n  const raw = Array.isArray(d.kriteria)\n    ? d.kriteria\n    : String(d.kriteria || '').split(/[,;\\n]+/).filter(Boolean);\n  const criteria = raw.map(cleanCriterion).filter(Boolean);\n  const passed = [];\n  const failed = [];\n  for (const criterion of criteria) {\n    const normalized = normalize(criterion);\n    const found = textCV.includes(normalized)\n      || compactCV.includes(normalized.replace(/\\s/g, ''));\n    (found ? passed : failed).push(criterion);\n  }\n  const ok = failed.length === 0;\n  items.push({ json: {\n    ...d,\n    ruleCheck: ok ? 'Memenuhi' : 'Tidak Memenuhi',\n    alasanRuleCheck: ok ? 'Semua kriteria wajib terpenuhi'\n      : 'Kriteria tidak terpenuhi: ' + failed.join(', '),\n    kriteriaTerpenuhi: passed,\n    kriteriaGagal: failed,\n  } });\n}\nreturn items;"
       },
       "id": "rule-check",
       "name": "Rule Check (Code Node)",
@@ -113,7 +114,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// LLM Scoring dengan Exponential Backoff Retry (3x: 1s, 3s, 7s)\n(async () => {\n  async function callLLMWithRetry(payload, config, maxRetries = 3) {\n    const baseDelay = 1000;\n    const multiplier = 3;\n    \n    for (let attempt = 0; attempt <= maxRetries; attempt++) {\n      try {\n        const controller = new AbortController();\n        const timeout = setTimeout(() => controller.abort(), 120000);\n        \n        const resp = await fetch(config.apiUrl, {\n          method: 'POST',\n          headers: {\n            'Content-Type': 'application/json',\n            'Authorization': 'Bearer ' + config.apiKey\n          },\n          body: JSON.stringify(payload),\n          signal: controller.signal\n        });\n        \n        clearTimeout(timeout);\n        \n        if (!resp.ok) {\n          const bodyText = await resp.text();\n          throw new Error('LLM API HTTP ' + resp.status + ': ' + bodyText.slice(0, 200));\n        }\n        \n        const data = await resp.json();\n        return data.choices?.[0]?.message?.content || data.content || '';\n      } catch (err) {\n        if (attempt >= maxRetries) throw err;\n        const delay = baseDelay * Math.pow(multiplier, attempt);\n        await new Promise(r => setTimeout(r, delay));\n      }\n    }\n  }\n\n  function parseLLMResponse(raw) {\n    if (!raw) return null;\n    let content = String(raw).trim();\n    const fenceMatch = content.match(/```(?:json)?\\s*([\\s\\S]*?)```/);\n    if (fenceMatch) content = fenceMatch[1].trim();\n    try { return JSON.parse(content); } catch (_) {}\n    const jsonMatch = content.match(/\\{[\\s\\S]*\\}/);\n    if (jsonMatch) { try { return JSON.parse(jsonMatch[0]); } catch (_) {} }\n    return null;\n  }\n\n  function normalizeScore(raw) {\n    const s = Number(raw);\n    return isNaN(s) ? null : Math.max(0, Math.min(100, s));\n  }\n\n  const items = [];\n  for (const item of $input.all()) {\n    const d = item.json;\n    const apiKey = $env.LLM_API_KEY;\n    const apiUrl = $env.LLM_API_URL;\n    const model = $env.LLM_MODEL || 'default';\n    \n    if (!apiKey || !apiUrl) {\n      items.push({ json: { ...d, skorLLM: 0, skillTerdeteksi: '', alasanSkor: 'LLM config missing', enrichmentNotes: '', errorFlag: 'llm_config_missing', llmRetry: 0 } });\n      continue;\n    }\n    \n    const kriteriaCsv = Array.isArray(d.kriteria) ? d.kriteria.join(', ') : String(d.kriteria || '');\n    const payload = {\n      model,\n      messages: [\n        { role: 'system', content: 'Anda asisten perekrut. Nilai kesesuaian CV dengan kriteria. Deteksi skill ekuivalen/superior (contoh Adobe Premiere > Capcut). Hitung skor 0-100. Balas JSON: {\"skor\": <0-100>, \"skill_terdeteksi\": [...], \"alasan_llm\": \"...\", \"enrichment_notes\": \"...\"} dalam Bahasa Indonesia.' },\n        { role: 'user', content: 'Lowongan: ' + (d.lowongan || '') + '\\nKriteria: ' + kriteriaCsv + '\\nCV: ' + (d.textCV || '') }\n      ],\n      temperature: 0.2,\n      response_format: { type: 'json_object' }\n    };\n    \n    try {\n      const rawContent = await callLLMWithRetry(payload, { apiKey, apiUrl, model }, 3);\n      const parsed = parseLLMResponse(rawContent);\n      \n      if (parsed) {\n        const skor = normalizeScore(parsed.skor);\n        if (skor !== null) {\n          items.push({ json: { ...d, skorLLM: skor, skillTerdeteksi: Array.isArray(parsed.skill_terdeteksi) ? parsed.skill_terdeteksi.join(', ') : String(parsed.skill_terdeteksi || ''), alasanSkor: String(parsed.alasan_llm || ''), enrichmentNotes: String(parsed.enrichment_notes || ''), errorFlag: '', llmRetries: 3 } });\n          continue;\n        }\n      }\n      throw new Error('LLM parse failed');\n    } catch (err) {\n      const textCV = (d.textCV || '').toLowerCase();\n      const kriteria = Array.isArray(d.kriteria) ? d.kriteria : [];\n      const bobotSkill = Number(d.bobotSkill) || 0.40;\n      const bobotExp = Number(d.bobotPengalaman) || 0.35;\n      const bobotEdu = Number(d.bobotPendidikan) || 0.25;\n      \n      function scoreComponent(items) {\n        if (items.length === 0) return 100;\n        let hit = 0;\n        for (const k of items) {\n          const key = String(k).toLowerCase().replace(/[.\\s]/g, '');\n          if (key && textCV.includes(key)) hit++;\n        }\n        return (hit / items.length) * 100;\n      }\n      \n      const skillK = kriteria.filter(k => !String(k).toLowerCase().startsWith('pengalaman:') && !String(k).toLowerCase().startsWith('pendidikan:'));\n      const expK = kriteria.filter(k => String(k).toLowerCase().startsWith('pengalaman:'));\n      const eduK = kriteria.filter(k => String(k).toLowerCase().startsWith('pendidikan:'));\n      \n      const skor = Math.round(scoreComponent(skillK) * bobotSkill + scoreComponent(expK) * bobotExp + scoreComponent(eduK) * bobotEdu);\n      \n      items.push({ json: { ...d, skorLLM: skor, skillTerdeteksi: '', alasanSkor: 'Fallback rule-based (LLM gagal: ' + err.message + ')', enrichmentNotes: '', errorFlag: 'llm_fallback', llmRetries: 3 } });\n    }\n  }\n  return items;\n})();"
+        "jsCode": "// LLM Scoring dengan Exponential Backoff Retry (3x: 1s, 3s, 7s)\nreturn (async () => {\n  async function callLLMWithRetry(payload, config, maxRetries = 3) {\n    const baseDelay = 1000;\n    const multiplier = 3;\n    \n    for (let attempt = 0; attempt <= maxRetries; attempt++) {\n      try {\n\n        const data = await helpers.httpRequest({\n          method: 'POST',\n          url: config.apiUrl,\n          headers: {\n            'Content-Type': 'application/json',\n            'Authorization': 'Bearer ' + config.apiKey\n          },\n          body: payload,\n          json: true\n        });\n        return data.choices?.[0]?.message?.content || data.content || '';\n      } catch (err) {\n        if (attempt >= maxRetries) throw err;\n        const delay = baseDelay * Math.pow(multiplier, attempt);\n        await new Promise(r => setTimeout(r, delay));\n      }\n    }\n  }\n\n  function parseLLMResponse(raw) {\n    if (!raw) return null;\n    let content = String(raw).trim();\n    const fenceMatch = content.match(/```(?:json)?\\s*([\\s\\S]*?)```/);\n    if (fenceMatch) content = fenceMatch[1].trim();\n    try { return JSON.parse(content); } catch (_) {}\n    const jsonMatch = content.match(/\\{[\\s\\S]*\\}/);\n    if (jsonMatch) { try { return JSON.parse(jsonMatch[0]); } catch (_) {} }\n    return null;\n  }\n\n  function normalizeScore(raw) {\n    const s = Number(raw);\n    return isNaN(s) ? null : Math.max(0, Math.min(100, s));\n  }\n\n  const items = [];\n  for (const item of $input.all()) {\n    const d = item.json;\n    const apiKey = $env.LLM_API_KEY;\n    const apiUrl = $env.LLM_API_URL;\n    const model = $env.LLM_MODEL || 'default';\n    \n    \n    const kriteriaCsv = Array.isArray(d.kriteria) ? d.kriteria.join(', ') : String(d.kriteria || '');\n    const payload = {\n      model,\n      messages: [\n        { role: 'system', content: 'Anda asisten perekrut. Nilai kesesuaian CV dengan kriteria. Deteksi skill ekuivalen/superior (contoh Adobe Premiere > Capcut). Hitung skor 0-100. Balas JSON: {\"skor\": <0-100>, \"skill_terdeteksi\": [...], \"alasan_llm\": \"...\", \"enrichment_notes\": \"...\"} dalam Bahasa Indonesia.' },\n        { role: 'user', content: 'Lowongan: ' + (d.lowongan || '') + '\\nKriteria: ' + kriteriaCsv + '\\nCV: ' + (d.textCV || '') }\n      ],\n      temperature: 0.2,\n      response_format: { type: 'json_object' }\n    };\n    \n    try {\n      if (!apiKey || !apiUrl) throw new Error('LLM config missing');\n      const rawContent = await callLLMWithRetry(payload, { apiKey, apiUrl, model }, 3);\n      const parsed = parseLLMResponse(rawContent);\n      \n      if (parsed) {\n        const skor = normalizeScore(parsed.skor);\n        if (skor !== null) {\n          items.push({ json: { ...d, skorLLM: skor, skillTerdeteksi: Array.isArray(parsed.skill_terdeteksi) ? parsed.skill_terdeteksi.join(', ') : String(parsed.skill_terdeteksi || ''), alasanSkor: String(parsed.alasan_llm || ''), enrichmentNotes: String(parsed.enrichment_notes || ''), errorFlag: '', llmRetries: 3 } });\n          continue;\n        }\n      }\n      throw new Error('LLM parse failed');\n    } catch (err) {\n      const textCV = (d.textCV || '').toLowerCase().replace(/[.\\s]/g, '');\n      const kriteria = Array.isArray(d.kriteria) ? d.kriteria : [];\n      const bobotSkill = Number(d.bobotSkill) || 0.40;\n      const bobotExp = Number(d.bobotPengalaman) || 0.35;\n      const bobotEdu = Number(d.bobotPendidikan) || 0.25;\n      \n      function scoreComponent(items) {\n        if (items.length === 0) return 100;\n        let hit = 0;\n        for (const k of items) {\n          const key = String(k).toLowerCase().replace(/[.\\s]/g, '');\n          if (key && textCV.includes(key)) hit++;\n        }\n        return (hit / items.length) * 100;\n      }\n      \n      const skillK = kriteria.filter(k => !String(k).toLowerCase().startsWith('pengalaman:') && !String(k).toLowerCase().startsWith('pendidikan:'));\n      const expK = kriteria.filter(k => String(k).toLowerCase().startsWith('pengalaman:')).map(k => String(k).slice(11).trim());\n      const eduK = kriteria.filter(k => String(k).toLowerCase().startsWith('pendidikan:')).map(k => String(k).slice(11).trim());\n      \n      const skor = Math.round(scoreComponent(skillK) * bobotSkill + scoreComponent(expK) * bobotExp + scoreComponent(eduK) * bobotEdu);\n      \n      items.push({ json: { ...d, skorLLM: skor, skillTerdeteksi: '', alasanSkor: 'Fallback rule-based (LLM gagal: ' + err.message + ')', enrichmentNotes: '', errorFlag: (!apiKey || !apiUrl) ? 'llm_config_missing' : 'llm_fallback', llmRetries: 3 } });\n    }\n  }\n  return items;\n})();"
       },
       "id": "llm-scoring",
       "name": "LLM Scoring (Code Node + Retry)",
@@ -158,7 +159,11 @@
           "value": "={{ $env.SHEET_ID_DATA_KANDIDAT }}",
           "mode": "id"
         },
-        "sheetName": "Data Kandidat",
+        "sheetName": {
+          "__rl": true,
+          "value": "Data Kandidat",
+          "mode": "name"
+        },
         "options": {},
         "range": "A:S",
         "returnAll": true
@@ -166,18 +171,19 @@
       "id": "sheets-read-existing",
       "name": "Baca Data Existing (Sheets)",
       "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": "4.5",
+      "typeVersion": 4.5,
       "position": [
         300,
         200
       ],
       "credentials": {
         "googleSheetsOAuth2Api": "Google Sheets (AI HR)"
-      }
+      },
+      "alwaysOutputData": true
     },
     {
       "parameters": {
-        "jsCode": "// Dedup Check: kandidat dari jalur utama + lookup existing via node ref\n// Kandidat = $input (dari Merge Paths langsung)\n// Existing sheets = $('Baca Data Existing (Sheets)') (node paralel)\n\n// Ambil data existing (baris sheets) via node reference\nconst existingNode = $('Baca Data Existing (Sheets)');\nconst existingRows = existingNode ? existingNode.all() : [];\n\n// Build lookup set: email+lowongan dalam 24 jam\nconst now = Date.now();\nconst dayMs = 24 * 60 * 60 * 1000;\nconst existingSet = new Set();\nfor (const row of existingRows) {\n  const j = row.json;\n  const email = String(j.Email || j.email || j.C || '').trim().toLowerCase();\n  const lowongan = String(j.Lowongan || j.lowongan || j.E || '').trim().toLowerCase();\n  const ts = new Date(j.Timestamp || j.timestamp || j.A || 0).getTime();\n  if (email && lowongan && !isNaN(ts) && (now - ts) < dayMs) {\n    existingSet.add(email + '|' + lowongan);\n  }\n}\n\n// Iterasi = KANDIDAT dari jalur utama\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const email = String(d.email || '').trim().toLowerCase();\n  const lowongan = String(d.lowongan || '').trim().toLowerCase();\n  const key = email + '|' + lowongan;\n  const isDuplicate = existingSet.has(key);\n  items.push({ json: { ...d, isDuplicate, skipWrite: isDuplicate } });\n}\nreturn items;"
+        "jsCode": "// E2E-safe dedup: Sheets lookup runs first, candidate comes from Merge Paths.\nconst referencedExisting = $('Baca Data Existing (Sheets)').all();\nconst existingRows = referencedExisting.length ? referencedExisting : $input.all();\nconst referencedCandidates = $('Merge Paths').all();\nconst candidateItems = referencedCandidates.length ? referencedCandidates : $input.all();\nconst now = Date.now();\nconst dayMs = 24 * 60 * 60 * 1000;\nconst existingSet = new Set();\nfor (const row of existingRows) {\n  const j = row.json || {};\n  const email = String(j.Email || j.email || j.C || '').trim().toLowerCase();\n  const lowongan = String(j.Lowongan || j.lowongan || j.E || '').trim().toLowerCase();\n  const ts = new Date(j.Timestamp || j.timestamp || j.A || 0).getTime();\n  if (email && lowongan && !Number.isNaN(ts) && (now - ts) < dayMs) {\n    existingSet.add(email + '|' + lowongan);\n  }\n}\nreturn candidateItems.map((item) => {\n  const d = item.json || {};\n  const email = String(d.email || '').trim().toLowerCase();\n  const lowongan = String(d.lowongan || '').trim().toLowerCase();\n  const isDuplicate = existingSet.has(email + '|' + lowongan);\n  return { json: { ...d, isDuplicate, skipWrite: isDuplicate } };\n});"
       },
       "id": "dedup-check",
       "name": "Dedup Check Flag",
@@ -235,7 +241,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Siapkan baris untuk Google Sheets (19 kolom)\nfunction escapeHtml(str) {\n  if (str === undefined || str === null) return '';\n  return String(str)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#039;');\n}\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const row = [\n    new Date().toISOString(), d.nama||'', d.email||'', d.noHP||'',\n    d.lowongan||'', d.urlCV||'', d.ruleCheck||'', d.alasanRuleCheck||'',\n    d.skillTerdeteksi||'', d.skorLLM??'', d.alasanSkor||'',\n    d.enrichmentNotes||'', d.kategori||'', d.alasanKategori||'',\n    d.kategoriLabel||'', 'N/A', 'N/A', '', d.errorFlag||''\n  ];\n  items.push({ json: { ...d, sheetRow: row, autoReplyStatus: 'N/A', notifStatus: 'N/A', auditEventType: d.auditEventType || 'pipeline_end' } });\n}\nreturn items;"
+        "jsCode": "const items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const isLow = d.kategori === 'Low';\n  const notifStatus = isLow ? 'N/A' : 'Pending';\n  const autoReplyStatus = isLow ? 'Pending' : 'N/A';\n  const row = [\n    new Date().toISOString(), d.nama || '', d.email || '', d.noHP || '', d.lowongan || '', d.urlCV || '',\n    d.ruleCheck || '', d.alasanRuleCheck || '', d.skillTerdeteksi || '', d.skorLLM ?? '', d.alasanSkor || '',\n    d.enrichmentNotes || '', d.kategori || '', d.alasanKategori || '', d.kategoriLabel || '', notifStatus,\n    autoReplyStatus, '', d.errorFlag || ''\n  ];\n  items.push({ json: {\n    ...d,\n    Timestamp: row[0], Nama: row[1], Email: row[2], 'No HP': row[3], Lowongan: row[4], 'URL CV': row[5],\n    'Rule Check': row[6], 'Alasan Rule Check': row[7], 'Skill Terdeteksi': row[8], 'Skor LLM': row[9],\n    'Alasan Skor': row[10], 'Enrichment Notes': row[11], Kategori: row[12], 'Alasan Kategori': row[13],\n    'Kategori Label': row[14], 'Status Notifikasi HR': row[15], 'Status Auto-Reply': row[16],\n    'Waktu Auto-Reply': row[17], 'Error Flag': row[18], sheetRow: row, autoReplyStatus, notifStatus,\n    auditEventType: d.auditEventType || 'pipeline_end'\n  } });\n}\nreturn items;"
       },
       "id": "prepare-sheet-row",
       "name": "Siapkan Baris Sheets",
@@ -254,41 +260,26 @@
           "value": "={{ $env.SHEET_ID_DATA_KANDIDAT }}",
           "mode": "id"
         },
-        "sheetName": "Data Kandidat",
+        "sheetName": {
+          "__rl": true,
+          "value": "Data Kandidat",
+          "mode": "name"
+        },
         "columns": {
-          "mappingMode": "defineBelow",
-          "value": {
-            "Timestamp": "={{ $json.sheetRow[0] }}",
-            "Nama": "={{ $json.sheetRow[1] }}",
-            "Email": "={{ $json.sheetRow[2] }}",
-            "No HP": "={{ $json.sheetRow[3] }}",
-            "Lowongan": "={{ $json.sheetRow[4] }}",
-            "URL CV": "={{ $json.sheetRow[5] }}",
-            "Rule Check": "={{ $json.sheetRow[6] }}",
-            "Alasan Rule Check": "={{ $json.sheetRow[7] }}",
-            "Skill Terdeteksi": "={{ $json.sheetRow[8] }}",
-            "Skor LLM": "={{ $json.sheetRow[9] }}",
-            "Alasan Skor": "={{ $json.sheetRow[10] }}",
-            "Enrichment Notes": "={{ $json.sheetRow[11] }}",
-            "Kategori": "={{ $json.sheetRow[12] }}",
-            "Alasan Kategori": "={{ $json.sheetRow[13] }}",
-            "Kategori Label": "={{ $json.sheetRow[14] }}",
-            "Status Notifikasi HR": "={{ $json.sheetRow[15] }}",
-            "Status Auto-Reply": "={{ $json.sheetRow[16] }}",
-            "Waktu Auto-Reply": "={{ $json.sheetRow[17] }}",
-            "Error Flag": "={{ $json.sheetRow[18] }}"
-          }
+          "mappingMode": "autoMapInputData",
+          "value": {}
         },
         "options": {
           "retryOnFail": true,
           "maxTries": 4,
-          "waitBetweenTries": 2000
+          "waitBetweenTries": 2000,
+          "handlingExtraData": "ignoreIt"
         }
       },
       "id": "write-sheets",
       "name": "Tulis ke Google Sheets",
       "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": "4.5",
+      "typeVersion": 4.5,
       "position": [
         800,
         -100
@@ -331,7 +322,6 @@
     },
     {
       "parameters": {
-        "to": "={{ $env.HR_EMAIL }}",
         "subject": "={{ '[Lamaran ' + $json.kategori + '] ' + $json.nama + ' - ' + $json.lowongan }}",
         "emailFormat": "html",
         "message": "={{ '<h3>Kandidat ' + $json.kategori.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + ' (' + $json.kategoriLabel.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + ')</h3>' + '<table>' + '<tr><td><b>Nama</b></td><td>' + $json.nama.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + '</td></tr>' + '<tr><td><b>Email</b></td><td>' + $json.email.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + '</td></tr>' + '<tr><td><b>Lowongan</b></td><td>' + $json.lowongan.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + '</td></tr>' + '<tr><td><b>Kategori</b></td><td>' + $json.kategori.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + ' (' + $json.kategoriLabel.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + ')</td></tr>' + '<tr><td><b>Skor</b></td><td>' + $json.skorLLM + '/100</td></tr>' + '<tr><td><b>Skill</b></td><td>' + $json.skillTerdeteksi.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + '</td></tr>' + '</table>' + '<p><b>Alasan:</b><br>' + $json.alasanSkor.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + '</p>' }}",
@@ -339,12 +329,13 @@
           "retryOnFail": true,
           "maxTries": 4,
           "waitBetweenTries": 1000
-        }
+        },
+        "sendTo": "={{ $env.HR_EMAIL }}"
       },
       "id": "notif-hr",
       "name": "Notifikasi HR",
       "type": "n8n-nodes-base.gmail",
-      "typeVersion": "2.1",
+      "typeVersion": 2.1,
       "position": [
         1200,
         -150
@@ -355,7 +346,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Kategori -> status email\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  let notifStatus = 'N/A', autoReplyStatus = 'N/A';\n  if (d.kategori === 'High' || d.kategori === 'Medium') { notifStatus = 'Perlu'; autoReplyStatus = 'N/A'; }\n  else if (d.kategori === 'Low') { notifStatus = 'N/A'; autoReplyStatus = 'Pending'; }\n  items.push({ json: { ...d, notifStatus, autoReplyStatus, auditEventType: d.auditEventType || 'pipeline_end' } });\n}\nreturn items;"
+        "jsCode": "const sourceItems = $input.all();\nconst prior = $('Tulis ke Google Sheets').first().json || {};\nreturn sourceItems.map((item) => {\n  const d = item.json || {};\n  const candidate = d.email ? d : { ...prior, ...d };\n  const notifStatus = candidate.kategori === 'High' || candidate.kategori === 'Medium' ? 'Terkirim' : 'N/A';\n  const autoReplyStatus = candidate.kategori === 'Low' ? 'Pending' : 'N/A';\n  return { json: { ...candidate, notifStatus, autoReplyStatus, auditEventType: candidate.auditEventType || 'pipeline_end' } };\n});"
       },
       "id": "set-email-status",
       "name": "Set Status Email",
@@ -368,7 +359,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Tulis Audit Log (append-only)\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  items.push({\n    json: {\n      timestamp: new Date().toISOString(),\n      eventType: d.auditEventType || 'pipeline_end',\n      emailKandidat: d.email || '',\n      lowongan: d.lowongan || '',\n      detail: 'Kandidat ' + (d.nama || '') + ' → kategori ' + (d.kategori || '') + ' (skor ' + (d.skorLLM ?? '') + ')',\n      status: 'Success'\n    }\n  });\n}\nreturn items;"
+        "jsCode": "const items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const timestamp = new Date().toISOString();\n  const eventType = d.auditEventType || 'pipeline_end';\n  const emailKandidat = d.email || '';\n  const lowongan = d.lowongan || '';\n  const detail = 'Kandidat ' + (d.nama || '') + ' → kategori ' + (d.kategori || '') + ' (skor ' + (d.skorLLM ?? '') + ')';\n  items.push({ json: {\n    timestamp, eventType, emailKandidat, lowongan, detail, status: 'Success',\n    Timestamp: timestamp, 'Event Type': eventType, 'Email Kandidat': emailKandidat, Lowongan: lowongan,\n    Detail: detail, Status: 'Success'\n  } });\n}\nreturn items;"
       },
       "id": "build-audit-row",
       "name": "Build Audit Row",
@@ -387,28 +378,26 @@
           "value": "={{ $env.SHEET_ID_AUDIT_LOG }}",
           "mode": "id"
         },
-        "sheetName": "Audit Log",
+        "sheetName": {
+          "__rl": true,
+          "value": "Audit Log",
+          "mode": "name"
+        },
         "columns": {
-          "mappingMode": "defineBelow",
-          "value": {
-            "Timestamp": "={{ $json.timestamp }}",
-            "Event Type": "={{ $json.eventType }}",
-            "Email Kandidat": "={{ $json.emailKandidat }}",
-            "Lowongan": "={{ $json.lowongan }}",
-            "Detail": "={{ $json.detail }}",
-            "Status": "={{ $json.status }}"
-          }
+          "mappingMode": "autoMapInputData",
+          "value": {}
         },
         "options": {
           "retryOnFail": true,
           "maxTries": 4,
-          "waitBetweenTries": 2000
+          "waitBetweenTries": 2000,
+          "handlingExtraData": "ignoreIt"
         }
       },
       "id": "append-audit-log",
       "name": "Tulis Audit Log (Sheets)",
       "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": "4.5",
+      "typeVersion": 4.5,
       "position": [
         1400,
         100
@@ -447,6 +436,60 @@
       "position": [
         600,
         -250
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.SHEET_ID_DATA_KANDIDAT }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Data Kandidat",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "Email"
+          ],
+          "value": {
+            "Email": "={{ $json.Email || $json.email }}",
+            "Status Notifikasi HR": "={{ $json.notifStatus }}"
+          }
+        },
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 4,
+          "waitBetweenTries": 2000
+        }
+      },
+      "id": "update-notification-status",
+      "name": "Update Status Notifikasi HR",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1200,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": "Google Sheets (AI HR)"
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const current = $input.first().json || {};\nconst candidate = $('Set Status Email').first().json || {};\nreturn [{ json: { ...candidate, ...current } }];"
+      },
+      "id": "restore-after-notification-status",
+      "name": "Restore Candidate After Notification Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        0
       ]
     }
   ],
@@ -548,13 +591,6 @@
     },
     "Merge Paths": {
       "main": [
-        [
-          {
-            "node": "Dedup Check Flag",
-            "type": "main",
-            "index": 0
-          }
-        ],
         [
           {
             "node": "Baca Data Existing (Sheets)",
@@ -659,7 +695,7 @@
       "main": [
         [
           {
-            "node": "Build Audit Row",
+            "node": "Update Status Notifikasi HR",
             "type": "main",
             "index": 0
           }
@@ -698,6 +734,39 @@
           }
         ]
       ]
+    },
+    "Baca Data Existing (Sheets)": {
+      "main": [
+        [
+          {
+            "node": "Dedup Check Flag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Status Notifikasi HR": {
+      "main": [
+        [
+          {
+            "node": "Restore Candidate After Notification Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Candidate After Notification Status": {
+      "main": [
+        [
+          {
+            "node": "Build Audit Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
@@ -705,3 +774,6 @@
     "errorWorkflow": "error-workflow"
   }
 }
+
+
+

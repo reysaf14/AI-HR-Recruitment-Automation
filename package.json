@@ -4,10 +4,13 @@
   "description": "Otomatisasi Screening Kandidat untuk Tim HR — n8n workflow + custom scripts",
   "main": "scripts/parse-cv.js",
   "scripts": {
+    "test": "npm run test:e2e && npm run test:workflow",
+    "test:e2e": "node tests/e2e-test.js",
+    "test:workflow": "node tests/workflow-smoke-test.js",
     "test:parse": "node scripts/parse-cv.js",
     "test:rule": "node scripts/rule-check.js",
     "test:dedup": "node scripts/dedup-check.js",
-    "syntax:check": "node --check scripts/*.js"
+    "syntax:check": "node scripts/check-syntax.js"
   },
   "keywords": ["n8n", "hr", "recruitment", "screening", "llm"],
   "author": "",

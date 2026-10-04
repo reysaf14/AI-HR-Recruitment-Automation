@@ -195,7 +195,11 @@ function fallbackRuleScoring(cvText, options = {}) {
     bobot = {},
   } = options;
 
-  const normalizedCV = String(cvText || '').toLowerCase();
+  // Gunakan normalisasi yang sama untuk CV dan kriteria. Tanpa ini,
+  // kriteria "3 tahun" diubah menjadi "3tahun" tetapi CV tetap
+  // mengandung spasi, sehingga kandidat yang sebenarnya cocok kehilangan
+  // seluruh komponen experience.
+  const normalizedCV = String(cvText || '').toLowerCase().replace(/[.\s]/g, '');
   const bobotSkill = typeof bobot.skill === 'number' ? bobot.skill : 0.40;
   const bobotPengalaman = typeof bobot.experience === 'number' ? bobot.experience : 0.35;
   const bobotPendidikan = typeof bobot.education === 'number' ? bobot.education : 0.25;

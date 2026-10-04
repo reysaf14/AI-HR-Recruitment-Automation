@@ -1,4 +1,5 @@
 {
+  "id": "ai-hr-auto-reply-cron",
   "name": "Auto-Reply Cron - AI HR Recruitment",
   "nodes": [
     {
@@ -30,7 +31,11 @@
           "value": "={{ $env.SHEET_ID_DATA_KANDIDAT }}",
           "mode": "id"
         },
-        "sheetName": "Data Kandidat",
+        "sheetName": {
+          "__rl": true,
+          "value": "Data Kandidat",
+          "mode": "name"
+        },
         "options": {},
         "range": "A:S",
         "returnAll": true
@@ -38,14 +43,15 @@
       "id": "read-sheets",
       "name": "Baca Data Kandidat (Sheets)",
       "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": "4.5",
+      "typeVersion": 4.5,
       "position": [
         -600,
         0
       ],
       "credentials": {
         "googleSheetsOAuth2Api": "Google Sheets (AI HR)"
-      }
+      },
+      "alwaysOutputData": true
     },
     {
       "parameters": {
@@ -94,7 +100,6 @@
     },
     {
       "parameters": {
-        "to": "={{ $json.C || $json.Email }}",
         "subject": "={{ 'Informasi Lamaran - ' + ($json.E || $json.Lowongan) }}",
         "emailFormat": "html",
         "message": "={{ '<p>Halo ' + ($json.B || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + ',</p>' + '<p>Terima kasih telah melamar posisi ' + ($json.E || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#039;') + '.</p>' + '<p>Kami telah meninjau lamaran Anda dengan saksama. Pada tahap seleksi ini, kami menilai profil Anda belum sesuai dengan kriteria yang dibutuhkan untuk posisi tersebut.</p>' + '<p>Kami sangat menghargai waktu dan minat Anda untuk bergabung dengan kami. Kami berharap Anda sukses dalam perjalanan karier dan semoga kita dapat bekerja sama di kesempatan lain.</p>' + '<p>Salam hangat,<br>Tim Rekrutmen</p>' }}",
@@ -102,12 +107,13 @@
           "retryOnFail": true,
           "maxTries": 4,
           "waitBetweenTries": 1000
-        }
+        },
+        "sendTo": "={{ $json.C || $json.Email }}"
       },
       "id": "send-auto-reply",
       "name": "Kirim Auto-Reply Tolak",
       "type": "n8n-nodes-base.gmail",
-      "typeVersion": "2.1",
+      "typeVersion": 2.1,
       "position": [
         0,
         -100
@@ -124,11 +130,18 @@
           "value": "={{ $env.SHEET_ID_DATA_KANDIDAT }}",
           "mode": "id"
         },
-        "sheetName": "Data Kandidat",
-        "range": "={{ 'Q' + $json._rowIndex + ':R' + $json._rowIndex }}",
+        "sheetName": {
+          "__rl": true,
+          "value": "Data Kandidat",
+          "mode": "name"
+        },
         "columns": {
           "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "row_number"
+          ],
           "value": {
+            "row_number": "={{ $('Filter Low + Pending + 3 Hari').item.json.row_number || $('Filter Low + Pending + 3 Hari').item.json._rowIndex }}",
             "Status Auto-Reply": "Terkirim",
             "Waktu Auto-Reply": "={{ new Date().toISOString() }}"
           }
@@ -142,7 +155,7 @@
       "id": "update-status",
       "name": "Update Status Auto-Reply",
       "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": "4.5",
+      "typeVersion": 4.5,
       "position": [
         200,
         -100
@@ -172,11 +185,18 @@
           "value": "={{ $env.SHEET_ID_DATA_KANDIDAT }}",
           "mode": "id"
         },
-        "sheetName": "Data Kandidat",
-        "range": "={{ 'Q' + $json._rowIndex + ':R' + $json._rowIndex }}",
+        "sheetName": {
+          "__rl": true,
+          "value": "Data Kandidat",
+          "mode": "name"
+        },
         "columns": {
           "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "row_number"
+          ],
           "value": {
+            "row_number": "={{ $('Filter Low + Pending + 3 Hari').item.json.row_number || $('Filter Low + Pending + 3 Hari').item.json._rowIndex }}",
             "Status Auto-Reply": "={{ $json._updateStatus }}",
             "Waktu Auto-Reply": "={{ $json._updateWaktu }}"
           }
@@ -190,7 +210,7 @@
       "id": "update-status-fail",
       "name": "Update Status Gagal",
       "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": "4.5",
+      "typeVersion": 4.5,
       "position": [
         200,
         150
@@ -201,7 +221,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Build Audit Row untuk auto-reply\nconst items = [];\nfor (const item of $input.all()) {\n  const d = item.json;\n  const status = d._updateStatus || 'Success';\n  const detail = status === 'Success'\n    ? 'Auto-reply terkirim ke ' + (d.C || d.Email)\n    : 'Auto-reply gagal: ' + (d.auditDetail || 'Unknown error');\n  items.push({\n    json: {\n      timestamp: new Date().toISOString(),\n      eventType: 'auto_reply',\n      emailKandidat: d.C || d.Email || '',\n      lowongan: d.E || d.Lowongan || '',\n      detail: detail,\n      status: status\n    }\n  });\n}\nreturn items;"
+        "jsCode": "const sourceItems = $('Filter Low + Pending + 3 Hari').all();\nconst currentItems = $input.all();\nreturn currentItems.map((item, index) => {\n  const current = item.json || {};\n  const source = sourceItems[index]?.json || {};\n  const email = source.C || source.Email || current.C || current.Email || '';\n  const lowongan = source.E || source.Lowongan || current.E || current.Lowongan || '';\n  const status = current._updateStatus || 'Success';\n  const detail = status === 'Success'\n    ? 'Auto-reply terkirim ke ' + email\n    : 'Auto-reply gagal: ' + (current.auditDetail || 'Unknown error');\n  return { json: {\n    timestamp: new Date().toISOString(), eventType: 'auto_reply', emailKandidat: email,\n    lowongan, detail, status,\n    Timestamp: new Date().toISOString(), 'Event Type': 'auto_reply', 'Email Kandidat': email,\n    Lowongan: lowongan, Detail: detail, Status: status,\n  } };\n});"
       },
       "id": "build-audit-auto",
       "name": "Build Audit Auto-Reply",
@@ -220,7 +240,11 @@
           "value": "={{ $env.SHEET_ID_AUDIT_LOG }}",
           "mode": "id"
         },
-        "sheetName": "Audit Log",
+        "sheetName": {
+          "__rl": true,
+          "value": "Audit Log",
+          "mode": "name"
+        },
         "columns": {
           "mappingMode": "defineBelow",
           "value": {
@@ -230,7 +254,63 @@
             "Lowongan": "={{ $json.lowongan }}",
             "Detail": "={{ $json.detail }}",
             "Status": "={{ $json.status }}"
-          }
+          },
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Event Type",
+              "displayName": "Event Type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Email Kandidat",
+              "displayName": "Email Kandidat",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Lowongan",
+              "displayName": "Lowongan",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Detail",
+              "displayName": "Detail",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
         },
         "options": {
           "retryOnFail": true,
@@ -241,7 +321,7 @@
       "id": "append-audit-auto",
       "name": "Tulis Audit Auto-Reply (Sheets)",
       "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": "4.5",
+      "typeVersion": 4.5,
       "position": [
         600,
         -50

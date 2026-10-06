@@ -115,7 +115,7 @@ function parseLLMResponse(rawContent) {
 // ============================================================
 function normalizeScore(rawSkor, min = 0, max = 100) {
   let s = Number(rawSkor);
-  if (isNaN(s)) return null;
+  if (!Number.isFinite(s)) return null;
   if (s < min) s = min;
   if (s > max) s = max;
   return s;
@@ -195,11 +195,18 @@ function fallbackRuleScoring(cvText, options = {}) {
     bobot = {},
   } = options;
 
-  // Gunakan normalisasi yang sama untuk CV dan kriteria. Tanpa ini,
-  // kriteria "3 tahun" diubah menjadi "3tahun" tetapi CV tetap
-  // mengandung spasi, sehingga kandidat yang sebenarnya cocok kehilangan
-  // seluruh komponen experience.
-  const normalizedCV = String(cvText || '').toLowerCase().replace(/[.\s]/g, '');
+  const normalizeForMatch = (value) => String(value || '')
+    .toLowerCase()
+    .replace(/[^\w\s+#]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const normalizedCV = normalizeForMatch(cvText);
+  const matchesCriterion = (criterion) => {
+    const normalizedCriterion = normalizeForMatch(criterion);
+    if (!normalizedCriterion) return false;
+    const escaped = normalizedCriterion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp('(?:^|[^\\w+#])' + escaped + '(?:$|[^\\w+#])', 'i').test(normalizedCV);
+  };
   const bobotSkill = typeof bobot.skill === 'number' ? bobot.skill : 0.40;
   const bobotPengalaman = typeof bobot.experience === 'number' ? bobot.experience : 0.35;
   const bobotPendidikan = typeof bobot.education === 'number' ? bobot.education : 0.25;
@@ -221,9 +228,7 @@ function fallbackRuleScoring(cvText, options = {}) {
     if (items.length === 0) return 100; // tidak ada kriteria → dianggap penuh (netral)
     let hit = 0;
     for (const item of items) {
-      // Normalisasi variasi kata kunci (hilangkan spasi, .) untuk matching longgar
-      const itemKey = String(item).toLowerCase().replace(/[.\s]/g, '');
-      if (itemKey && normalizedCV.includes(itemKey)) hit++;
+      if (matchesCriterion(item)) hit++;
     }
     return (hit / items.length) * 100;
   };

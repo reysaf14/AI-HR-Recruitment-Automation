@@ -18,6 +18,10 @@ foreach ($line in Get-Content -LiteralPath $localEnvPath) {
   [Environment]::SetEnvironmentVariable($name, $value, 'Process')
 }
 
+if (-not $env:NODE_FUNCTION_ALLOW_EXTERNAL) {
+  $env:NODE_FUNCTION_ALLOW_EXTERNAL = 'adm-zip,pdf-parse'
+}
+
 $env:N8N_USER_FOLDER = $localN8nFolder
 New-Item -ItemType Directory -Path $localN8nFolder -Force | Out-Null
 

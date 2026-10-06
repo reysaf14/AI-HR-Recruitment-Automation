@@ -56,6 +56,14 @@ function skillVariants(skill) {
   return [...variants].filter((v) => v.length > 0);
 }
 
+function matchesNormalizedText(normalizedText, criterion) {
+  const normalizedCriterion = normalizeText(criterion);
+  if (!normalizedCriterion) return false;
+  const escaped = normalizedCriterion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp('(?:^|[^\\w+#])' + escaped + '(?:$|[^\\w+#])', 'i');
+  return pattern.test(normalizedText);
+}
+
 // ============================================================
 // UTILITAS: Parsing kriteria wajib
 // Kriteria bisa dipisah dengan koma, newline, atau titik-koma
@@ -136,7 +144,7 @@ function ruleCheck(cvText, kriteriaWajib, lowonganNama = '') {
 
   for (const kriteria of kriteriaList) {
     const variants = skillVariants(kriteria.nilai);
-    const found = variants.some((v) => cvNormalized.includes(v));
+    const found = variants.some((v) => matchesNormalizedText(cvNormalized, v));
 
     if (found) {
       kriteriaTerpenuhi.push(kriteria.nilai);
@@ -170,4 +178,4 @@ if (require.main === module) {
   console.log(JSON.stringify(result, null, 2));
 }
 
-module.exports = { ruleCheck, parseKriteriaWajib, normalizeText, skillVariants };
+module.exports = { ruleCheck, parseKriteriaWajib, normalizeText, skillVariants, matchesNormalizedText };

@@ -114,12 +114,24 @@ function parsePDF(buffer, useLibrary = false) {
 // PARSER: DOCX
 // DOCX adalah zip berisi document.xml. Ekstrak teks dari XML.
 // ============================================================
-function parseDOCX(buffer) {
+function parseDOCX(buffer, useLibrary = false) {
   return new Promise((resolve, reject) => {
     try {
-      // DOCX = zip. Di n8n, pakai library adm-zip atau jszip.
-      // Untuk fallback ringan, cari XML mentah dalam buffer.
-      const text = buffer.toString('utf8');
+      let text = buffer.toString('utf8');
+
+      // DOCX nyata adalah ZIP terkompresi. Gunakan adm-zip bila tersedia;
+      // fallback raw XML tetap dipertahankan untuk fixture sederhana/testing.
+      if (useLibrary) {
+        // eslint-disable-next-line global-require
+        const AdmZip = require('adm-zip');
+        const zip = new AdmZip(buffer);
+        const documentEntry = zip.getEntry('word/document.xml');
+        if (!documentEntry) {
+          return resolve('');
+        }
+        text = documentEntry.getData().toString('utf8');
+      }
+
       // Cari blok XML yang mengandung <w:t> tags
       const matches = text.match(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g) || [];
       let extracted = '';
@@ -179,7 +191,7 @@ async function parseCV(buffer, mimeType, fileName = '', options = {}) {
         text = await parsePDF(buffer, useLibrary);
         break;
       case 'docx':
-        text = await parseDOCX(buffer);
+        text = await parseDOCX(buffer, useLibrary);
         break;
       case 'txt':
         text = buffer.toString('utf8');

@@ -55,7 +55,13 @@ function ensureDir() {
 function safePath(filename) {
   const dir = getBufferDir();
   const resolved = path.resolve(dir, filename);
-  if (!resolved.startsWith(path.resolve(dir))) {
+  const relative = path.relative(path.resolve(dir), resolved);
+  if (
+    relative === ''
+    || relative === '..'
+    || relative.startsWith('..' + path.sep)
+    || path.isAbsolute(relative)
+  ) {
     return null; // path traversal attempt
   }
   return resolved;
